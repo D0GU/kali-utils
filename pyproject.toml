@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kali-utils"
+version = "0.1.0"
+description = "Terminal utilities for this home server: trctl (Transmission), plexsort (Plex library sorter), syswatch (system monitor)"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []          # standard library only
+
+[project.scripts]
+trctl = "trctl.cli:main"
+plexsort = "plexsort.cli:main"
+syswatch = "syswatch.cli:main"
+
+[tool.setuptools]
+packages = ["trctl", "plexsort", "syswatch"]

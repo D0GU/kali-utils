@@ -1,0 +1,321 @@
+"""plexsort tests. Everything runs in temp folders against trctl's fake Transmission daemon;
+no network access and no real torrents are touched."""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]  # kali-utils root
+sys.path[:0] = [str(ROOT), str(ROOT / "tests" / "trctl")]  # trctl's fake daemon
+
+from fake_daemon import FakeDaemon, make_torrent  # noqa: E402
+from trctl.rpc import Client  # noqa: E402
+
+from plexsort import engine, naming  # noqa: E402
+from plexsort.db import DB  # noqa: E402
+from plexsort.parse import build_items, clean_title  # noqa: E402
+from plexsort.providers import AnimeMap, Http, Match, apply_match, query_variants, score_match  # noqa: E402
+
+PACK = "(CBB) Space Drill Saga - The Complete Series (BD 1080p)(Dual-Audio)(HEVC-x265-10bit)"
+PACK_FILES = [
+    "01. Series/01 - Bust Through.mkv", "01. Series/02 - Pilot That Thing.mkv", "01. Series/03 - Two Faces.mkv",
+    "01. Series/03 - Two Faces.en.srt",
+    "02. Movies/(CBB) Space Drill Saga The Movie - 01 (Gurren-hen).mkv",
+    "03. Extra/01. NCOP/NCOP 01.mkv", "03. Extra/04. OVA/06 - Hot Tub.mkv",
+    "Torrent Description (READ Me).txt", "sample.mkv",
+]
+
+
+def make_tree(base: str, name: str, files: list[str]) -> str:
+    root = os.path.join(base, name)
+    for rel in files:
+        p = os.path.join(root, rel)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "wb") as f:
+            f.write(rel.encode() * 10)
+    return root
+
+
+class TestParse(unittest.TestCase):
+    def items(self, root, files):
+        items, leftovers, incomplete = build_items(root, [(f, 2_000_000_000) for f in files])
+        return {i.src: i for i in items}, leftovers, incomplete
+
+    def test_clean_title(self):
+        self.assertEqual(clean_title(PACK), ("Space Drill Saga", None))
+        self.assertEqual(clean_title("NINJA SCROLL (1993-2003) - Complete Movie and Anime TV Series - 1080p"),
+                         ("Ninja Scroll", 1993))
+        self.assertEqual(clean_title("Inception.2010.1080p.BluRay.x264-GRP"), ("Inception", 2010))
+        self.assertEqual(clean_title("Ninja Scroll, with Commentary (1993 BluRay - 1080p TRI Audio)"),
+                         ("Ninja Scroll, with Commentary", 1993))
+
+    def test_mixed_anime_pack(self):
+        items, leftovers, _ = self.items(PACK, PACK_FILES)
+        ep = items["01. Series/02 - Pilot That Thing.mkv"]
+        self.assertEqual((ep.kind, ep.category, ep.title, ep.season, ep.episode, ep.ep_title),
+                         ("episode", "show", "Space Drill Saga", 1, 2, "Pilot That Thing"))
+        self.assertTrue(ep.absolute and ep.anime)
+        movie = items["02. Movies/(CBB) Space Drill Saga The Movie - 01 (Gurren-hen).mkv"]
+        self.assertEqual((movie.kind, movie.category), ("movie", "movie"))
+        ncop = items["03. Extra/01. NCOP/NCOP 01.mkv"]
+        self.assertEqual((ncop.kind, ncop.category, ncop.title, ncop.extra_name), ("extra", "show", "Space Drill Saga", "NCOP 01"))
+        ova = items["03. Extra/04. OVA/06 - Hot Tub.mkv"]
+        self.assertEqual((ova.kind, ova.season, ova.ep_title), ("episode", 0, "Hot Tub"))
+        self.assertEqual(items["01. Series/03 - Two Faces.mkv"].subs[0].lang, "en")
+        self.assertEqual([l for l, _ in leftovers], ["Torrent Description (READ Me).txt"])
+
+    def test_scene_names(self):
+        cases = {
+            "The.Office.US.S02E03.720p.WEB-DL.x264-GRP.mkv": ("episode", "The Office US", 2, 3),
+            "Show.Name.S01E01E02.1080p.mkv": ("episode", "Show Name", 1, 1),
+            "[SubsPlease] Frieren - 12 (1080p) [ABCD].mkv": ("episode", "Frieren", 1, 12),
+            "Mr. Robot (2015) Season 1/Mr.Robot.1x05.mkv": ("episode", "Mr Robot", 1, 5),
+            "Inception.2010.1080p.BluRay.x264.mkv": ("movie", "Inception", None, None),
+        }
+        for name, (kind, title, season, ep) in cases.items():
+            it = build_items("Root", [(name, 2_000_000_000)])[0][0]
+            self.assertEqual((it.kind, it.title, it.season, it.episode), (kind, title, season, ep), name)
+        double = build_items("Root", [("Show.Name.S01E01E02.1080p.mkv", 1)])[0][0]
+        self.assertEqual(double.episode_end, 2)
+
+    def test_samples_and_part_files(self):
+        items, _, incomplete = build_items("Movie.2020", [("Movie.2020.mkv", 4_000_000_000),
+                                                          ("Sample/movie-sample.mkv", 50_000_000),
+                                                          ("extra.nfo.part", 10)])
+        kinds = {i.src: i.kind for i in items}
+        self.assertEqual(kinds["Sample/movie-sample.mkv"], "skip")
+        self.assertEqual(incomplete, ["extra.nfo.part"])
+
+
+class TestProviders(unittest.TestCase):
+    def test_query_variants(self):
+        v = query_variants("Space Drill Saga The Movie - 02 (Lagann-hen)")
+        self.assertIn("Space Drill Saga Lagann-hen", v)
+        self.assertIn("Space Drill Saga The Movie", v)
+
+    def test_scoring_tells_sequels_apart(self):
+        q = query_variants("Tengen Toppa Gurren Lagann The Movie - 02 (Lagann-hen)")
+        gurren = Match("AniList", "1", "movie", "Gurren Lagann The Movie: Childhood's End", 2008,
+                       alt_titles=["Tengen Toppa Gurren Lagann: Gurren-hen"])
+        lagann = Match("AniList", "2", "movie", "Gurren Lagann The Movie: The Lights in the Sky are Stars", 2009,
+                       alt_titles=["Tengen Toppa Gurren Lagann: Lagann-hen"])
+        self.assertGreater(score_match(lagann, q, None, "movie"), score_match(gurren, q, None, "movie"))
+
+    def test_wrong_category_penalised(self):
+        q = query_variants("Ninja Scroll")
+        show = Match("AniList", "1", "show", "Ninja Scroll: The Series", 2003)
+        movie = Match("AniList", "2", "movie", "Ninja Scroll", 1993)
+        self.assertGreater(score_match(movie, q, 1993, "movie"), score_match(show, q, 1993, "movie"))
+
+    def test_anime_map(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "anime-list-full.json").write_text(json.dumps([
+                {"type": "TV", "anilist_id": 2001, "mal_id": 2001, "tvdb_id": 80096,
+                 "themoviedb_id": {"tv": 21729}, "imdb_id": ["tt0948103"], "season": {"tvdb": 1}},
+                {"type": "MOVIE", "anilist_id": 4107, "tvdb_id": 80096, "themoviedb_id": {"tv": 21729},
+                 "imdb_id": ["tt1288461"], "season": {"tvdb": 0}}]))
+            m = AnimeMap(Http(None), tmp)
+            self.assertEqual(m.lookup(anilist=2001)["ids"], {"tvdb": 80096, "tmdb": 21729, "imdb": "tt0948103"})
+            movie = m.lookup(mal=None, anilist=4107)["ids"]
+            self.assertNotIn("tmdb", movie)  # a TV tmdb id must not be used for a movie
+            self.assertEqual(naming.id_tag("movie", movie), " {imdb-tt1288461}")
+
+
+class EngineCase(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        t = self.tmp.name
+        self.download_dir = os.path.join(t, "torrents", "complete")
+        os.makedirs(self.download_dir)
+        self.cfg = {"movies_dir": os.path.join(t, "media", "Movies"), "tv_dir": os.path.join(t, "media", "TV Shows"),
+                    "database": os.path.join(t, "db", "library.db"), "tmdb_api_key": "", "id_tags": True,
+                    "remove_torrent": True, "delete_leftovers": True, "online": False, "inbox_dirs": ""}
+        self.db = DB(self.cfg["database"])
+        self.root = make_tree(self.download_dir, PACK, PACK_FILES)
+        self.daemon = FakeDaemon([make_torrent(7, PACK, [(f, 100) for f in PACK_FILES], done=1.0, status=6,
+                                               download_dir=self.download_dir)]).__enter__()
+        self.daemon.torrents[0]["magnetLink"] = "magnet:?xt=urn:btih:abc"
+        self.client = Client(self.daemon.url)
+
+    def tearDown(self):
+        self.daemon.__exit__(None, None, None)
+        self.db.close()
+        self.tmp.cleanup()
+
+    def verified_plan(self):
+        sources, downloading, err = engine.list_sources(self.cfg, self.client)
+        self.assertEqual((len(sources), downloading, err), (1, 0, ""))
+        plan = engine.make_plan(sources[0])
+        for g in plan.groups():
+            if g.category == "show":
+                apply_match(g.items, Match("AniList", "1", "show", "Space Drill: Saga", 2007, {"tvdb": 999}))
+            else:
+                apply_match(g.items, Match("AniList", "2", "movie", "Space Drill Movie", 2008, {"imdb": "tt42"}))
+        return plan
+
+
+class TestEngine(EngineCase):
+    def test_plan_destinations(self):
+        plan = self.verified_plan()
+        check = engine.check_plan(plan, self.cfg)
+        self.assertTrue(check.ok, check.errors)
+        dests = sorted(os.path.relpath(d, os.path.join(self.tmp.name, "media")) for d in check.dests.values())
+        self.assertEqual(dests, [
+            "Movies/Space Drill Movie (2008) {imdb-tt42}/Space Drill Movie (2008).mkv",
+            "TV Shows/Space Drill - Saga (2007) {tvdb-999}/Other/NCOP 01.mkv",
+            "TV Shows/Space Drill - Saga (2007) {tvdb-999}/Season 00/Space Drill - Saga (2007) - s00e06 - Hot Tub.mkv",
+            "TV Shows/Space Drill - Saga (2007) {tvdb-999}/Season 01/Space Drill - Saga (2007) - s01e01 - Bust Through.mkv",
+            "TV Shows/Space Drill - Saga (2007) {tvdb-999}/Season 01/Space Drill - Saga (2007) - s01e02 - Pilot That Thing.mkv",
+            "TV Shows/Space Drill - Saga (2007) {tvdb-999}/Season 01/Space Drill - Saga (2007) - s01e03 - Two Faces.mkv",
+        ])
+
+    def test_conflicts_block_apply(self):
+        plan = self.verified_plan()
+        check = engine.check_plan(plan, self.cfg)
+        existing = next(d for d in check.dests.values() if d.endswith(".mkv") and "Movies" in d)
+        os.makedirs(os.path.dirname(existing))
+        Path(existing).write_text("already here")
+        check = engine.check_plan(plan, self.cfg)
+        self.assertFalse(check.ok)
+        with self.assertRaises(engine.SortError):
+            engine.apply_plan(plan, self.cfg, self.db, self.client)
+        self.assertTrue(os.path.exists(os.path.join(self.root, "01. Series/01 - Bust Through.mkv")))
+
+    def test_apply_undo_retitle_scan(self):
+        plan = self.verified_plan()
+        result = engine.apply_plan(plan, self.cfg, self.db, self.client)
+        self.assertEqual(result.errors, [])
+        self.assertEqual(result.moved, 7)  # 6 videos + 1 subtitle
+        self.assertTrue(result.torrent_removed)
+        self.assertEqual(self.daemon.torrents, [])
+        self.assertFalse([m for m, a in self.daemon.calls if m == "torrent-remove" and a["delete-local-data"]])
+        self.assertFalse(os.path.exists(self.root), "torrent folder should be cleaned up")
+        show_dir = os.path.join(self.cfg["tv_dir"], "Space Drill - Saga (2007) {tvdb-999}")
+        sub = os.path.join(show_dir, "Season 01", "Space Drill - Saga (2007) - s01e03 - Two Faces.en.srt")
+        self.assertTrue(os.path.exists(sub))
+        titles = self.db.titles()
+        self.assertEqual(sorted((t["category"], t["episodes"] or 0) for t in titles), [("movie", 0), ("show", 4)])
+
+        # fix a title: folder and files are renamed
+        show = next(t for t in titles if t["category"] == "show")
+        moved, errors = engine.retitle(show["id"], "Space Drill Saga", 2007, {"tvdb": 1000}, "manual", self.cfg, self.db)
+        self.assertEqual(errors, [])
+        new_dir = os.path.join(self.cfg["tv_dir"], "Space Drill Saga (2007) {tvdb-1000}")
+        self.assertTrue(os.path.exists(os.path.join(new_dir, "Season 01", "Space Drill Saga (2007) - s01e03 - Two Faces.en.srt")))
+        self.assertFalse(os.path.exists(show_dir))
+
+        # scanning finds nothing new, and notices deletions
+        self.assertEqual(engine.scan_library(self.cfg, self.db), (0, 0))
+        os.remove(os.path.join(new_dir, "Other", "NCOP 01.mkv"))
+        self.assertEqual(engine.scan_library(self.cfg, self.db), (0, 1))
+        Path(new_dir, "Season 01", "Space Drill Saga (2007) - s01e09 - New.mkv").write_text("x")
+        self.assertEqual(engine.scan_library(self.cfg, self.db)[0], 1)
+
+        # undo puts the remaining files back and re-adds the torrent
+        restored, errors = engine.undo_operation(result.op_id, self.cfg, self.db, self.client, readd_torrent=True)
+        self.assertEqual(restored, 6)
+        self.assertTrue(any("missing" in e for e in errors))
+        self.assertTrue(os.path.exists(os.path.join(self.root, "01. Series/03 - Two Faces.en.srt")))
+        self.assertEqual(len(self.daemon.torrents), 1)
+
+    def test_keep_torrent_and_leftovers(self):
+        plan = self.verified_plan()
+        engine.apply_plan(plan, self.cfg, self.db, self.client, remove_torrent=False, delete_leftovers=False)
+        self.assertEqual(len(self.daemon.torrents), 1)
+        self.assertTrue(os.path.exists(os.path.join(self.root, "Torrent Description (READ Me).txt")))
+        self.assertTrue(os.path.exists(os.path.join(self.root, "sample.mkv")))
+
+
+@unittest.skipUnless(shutil.which("tmux"), "tmux not installed")
+class TestTUISmoke(EngineCase):
+    def setUp(self):
+        super().setUp()
+        cfg_path = os.path.join(self.tmp.name, "config.toml")
+        Path(cfg_path).write_text("\n".join(
+            f'{k} = {json.dumps(v) if not isinstance(v, bool) else str(v).lower()}' for k, v in self.cfg.items()) + "\n")
+        self.session = f"plexsort-test-{os.getpid()}"
+        cmd = (f"PLEXSORT_CONFIG='{cfg_path}' TRCTL_CONFIG=/nonexistent exec {sys.executable} "
+               f"'{ROOT / 'bin' / 'plexsort'}' --url {self.daemon.url}")
+        subprocess.run(["tmux", "new-session", "-d", "-s", self.session, "-x", "160", "-y", "40", "bash", "-c", cmd],
+                       check=True)
+
+    def tearDown(self):
+        subprocess.run(["tmux", "kill-session", "-t", self.session], capture_output=True)
+        super().tearDown()
+
+    def keys(self, *keys):
+        for k in keys:
+            subprocess.run(["tmux", "send-keys", "-t", self.session, k], check=True)
+            time.sleep(0.2)
+
+    def screen(self):
+        return subprocess.run(["tmux", "capture-pane", "-p", "-t", self.session], capture_output=True, text=True).stdout
+
+    def wait_for(self, text, timeout=8.0):
+        end = time.time() + timeout
+        while time.time() < end:
+            if text in (s := self.screen()):
+                return s
+            time.sleep(0.1)
+        self.fail(f"{text!r} never appeared:\n{self.screen()}")
+
+    def test_skip_keeps_cursor_and_shift_moves_five(self):
+        self.wait_for("Space Drill Saga - The Complete Series")
+        self.keys("Enter")
+        self.wait_for("not verified")
+        self.keys("j")                                   # first episode
+        self.wait_for("01. Series/01 - Bust Through.mkv  ·")
+        self.keys("Space")                               # skip it: it moves to "Skipped", cursor stays on this row
+        s = self.wait_for("01. Series/02 - Pilot That Thing.mkv  ·")
+        self.assertRegex(s, r"skip\s+01\. Series/01 - Bust Through\.mkv\s+\(not moved\)")
+        self.keys("S-Down")                              # 5 rows down: past 3 files + title row -> the movie file
+        self.wait_for("(CBB) Space Drill Saga The Movie - 01 (Gurren-hen).mkv  ·")
+        self.keys("S-Up", "J", "K")
+        self.wait_for("01. Series/02 - Pilot That Thing.mkv  ·")
+
+    def test_review_edit_apply_undo(self):
+        self.wait_for("Space Drill Saga - The Complete Series")
+        self.keys("Enter")
+        s = self.wait_for("not verified")
+        self.assertIn("s01e02", s)
+        # cursor starts on the show's title row: give it ids by hand
+        self.keys("e")
+        self.wait_for("Applies to every file")
+        self.keys("Down", "C-u", "Space Drill Saga", "Down", "C-u", "2007", "Down", "999", "Enter")
+        self.wait_for("✓ manual")
+        # the movie title is the last group: jump there via its file and set ids
+        for _ in range(6):  # title row, 5 files, then the movie's title row
+            self.keys("j")
+        self.keys("e")
+        self.wait_for("Applies to every file")
+        self.keys("Down", "C-u", "Space Drill Movie", "Down", "C-u", "2008", "Down", "Down", "Down", "tt42", "Enter")
+        self.wait_for("ready - press a")
+        self.keys("a")
+        self.wait_for("Sort into Plex library")
+        self.keys("Enter")
+        self.wait_for("Sorted 7 file(s)")
+        self.assertTrue(os.path.isdir(os.path.join(self.cfg["tv_dir"], "Space Drill Saga (2007) {tvdb-999}")))
+        self.assertEqual(self.daemon.torrents, [])
+        s = self.wait_for("Space Drill Movie (2008)")
+        self.assertIn("4 ep · 2 seasons", s)
+        # undo from History
+        self.keys("3")
+        self.wait_for("applied")
+        self.keys("u")
+        self.wait_for("Move the files back")
+        self.keys("t")
+        self.wait_for("re-added the torrent")
+        self.assertTrue(os.path.exists(os.path.join(self.root, "01. Series/01 - Bust Through.mkv")))
+        self.keys("q")
+
+
+if __name__ == "__main__":
+    unittest.main()
