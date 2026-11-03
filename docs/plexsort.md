@@ -7,7 +7,7 @@ Turns completed Transmission torrents into a properly named Plex library: movies
 3. deletes the leftover junk (.txt/.nfo/samples), and
 4. records everything in a SQLite library database, so any sort can be undone.
 
-Part of [kali-utils](../README.md). It reuses trctl's Transmission connection (`~/.config/trctl/config.toml`) and curses widgets.
+Part of [kali-utils](../README.md). It reuses trctl's Transmission connection (`~/.config/trctl/config.toml`) and the shared `kutil` curses widgets.
 
 ## Plex layout produced
 

@@ -84,6 +84,8 @@ def text_width(s: str) -> int:
 
 
 def truncate(s: str, width: int) -> str:
+    if width <= 0:
+        return ""
     if text_width(s) <= width:
         return s
     out, w = [], 0

@@ -212,10 +212,24 @@ def filesystems() -> list[dict]:
     return sorted(out, key=lambda f: f["mount"])
 
 
-def hwmon_temps() -> list[dict]:
+def drivetemp_disk(chip: str) -> str:
+    """Which disk a drivetemp hwmon chip belongs to."""
+    blocks = glob.glob(os.path.join(os.path.realpath(f"{chip}/device"), "block", "*"))
+    return os.path.basename(blocks[0]) if blocks else ""
+
+
+def hwmon_temps(drive_temps: bool = False, only_disks=None) -> list[dict]:
+    """Sensor readings. drivetemp asks the drive itself, which can reset its spin-down timer, so those chips
+    are read only on request (`drive_temps`), optionally just for the disks in `only_disks`."""
     temps = []
     for chip in sorted(glob.glob(f"{SYS}/class/hwmon/hwmon*")):
         name = read(f"{chip}/name").strip()
+        if name == "drivetemp" and not drive_temps:
+            continue
+        if name != "drivetemp" and drive_temps:
+            continue
+        if name == "drivetemp" and only_disks is not None and drivetemp_disk(chip) not in only_disks:
+            continue
         device = os.path.realpath(f"{chip}/device")
         for inp in sorted(glob.glob(f"{chip}/temp*_input")):
             base = inp[:-len("_input")]
@@ -497,8 +511,8 @@ def journal_disk_errors(names: list[str], since: str = "-24 hours") -> dict[str,
     return found
 
 
-def health_verdict(kind: str, kernel: dict, smart: dict | None, journal: list[str], temp: float | None,
-                   ioerr_baseline: int | None = None) -> tuple[str, list[str]]:
+def health_verdict(kind: str, kernel: dict, smart: dict | None, journal: list[str], temp: float | None
+                   ) -> tuple[str, list[str]]:
     """('ok' | 'warn' | 'fail' , reasons)."""
     level, reasons = "ok", []
 
@@ -582,6 +596,21 @@ def read_processes() -> dict[int, dict]:
 # The collector
 # --------------------------------------------------------------------------
 
+SMART_INTERVAL = 600   # seconds between SMART queries per disk
+DRIVE_TEMP_INTERVAL = 60
+
+
+def should_poll(rotating: bool, now: float, last: tuple[float, int] | None, ios: int, interval: float,
+                force: bool = False) -> bool:
+    """Is it time to query a drive? Spinning disks with no I/O since the last query are left alone, so an
+    idle disk can spin down and a sleeping one isn't woken. `last` is (time, I/O count) of the last query."""
+    if force or last is None:
+        return True
+    if now - last[0] < interval:
+        return False
+    return not rotating or ios != last[1]
+
+
 class Collector:
     """Call sample() periodically; slow sources refresh in a background thread."""
 
@@ -597,7 +626,10 @@ class Collector:
         self._wake = threading.Event()
         self.pci = pci_gpus()
         self.disks = block_devices()
-        self.ioerr_baseline = {d["name"]: kernel_disk_health(d["name"]).get("ioerr_cnt") or 0 for d in self.disks}
+        self.polled: dict[str, dict] = {"smart": {}, "temp": {}}   # disk -> (time, I/O count) of the last query
+        self.smart_cache: dict[str, dict | None] = {}
+        self.drive_temps: dict[str, list] = {}
+        self._force = False
         if slow:
             threading.Thread(target=self._slow_loop, daemon=True).start()
 
@@ -606,22 +638,44 @@ class Collector:
         self._wake.set()
 
     def refresh_slow(self) -> None:
+        """Re-read slow sources now, including querying drives (the user asked, so waking one is fine)."""
+        self._force = True
         self._wake.set()
+
+    def _poll_drives(self, now: float, force: bool) -> None:
+        ios = {n: v["reads"] + v["writes"] for n, v in parse_diskstats(read(f"{PROC}/diskstats")).items()}
+        due_temps = set()
+        for d in self.disks:
+            n, rotating, count = d["name"], "HDD" in d["kind"], ios.get(d["name"], 0)
+            if should_poll(rotating, now, self.polled["smart"].get(n), count, SMART_INTERVAL, force):
+                self.smart_cache[n] = smartctl_health(n) or udisks_smart(n)
+                self.polled["smart"][n] = (now, count)
+            if should_poll(rotating, now, self.polled["temp"].get(n), count, DRIVE_TEMP_INTERVAL, force):
+                due_temps.add(n)
+                self.polled["temp"][n] = (now, count)
+        if due_temps:
+            for n in due_temps:
+                self.drive_temps.pop(n, None)
+            for t in hwmon_temps(drive_temps=True, only_disks=due_temps):
+                disk = next((b for b in (os.path.basename(x) for x in glob.glob(os.path.join(t["device"], "block", "*")))),
+                            "")
+                self.drive_temps.setdefault(disk, []).append(t)
 
     def _hist(self, key: str, value: float) -> None:
         self.history.setdefault(key, deque(maxlen=HISTORY)).append(value)
 
     # -- slow sources ------------------------------------------------------------
 
-    def collect_slow(self) -> None:
+    def collect_slow(self, now: float | None = None) -> None:
+        force, self._force = self._force, False
+        self._poll_drives(now if now is not None else time.monotonic(), force)
         names = [d["name"] for d in self.disks]
         nv = nvidia_gpus() if any(g["vendor"] == "nvidia" for g in self.pci) else None
         gpus = nv if nv else [sysfs_gpu(g) for g in self.pci]
         procs = nvidia_processes() if nv else []
         health = {}
         for n in names:
-            smart = smartctl_health(n) or udisks_smart(n)
-            health[n] = {"kernel": kernel_disk_health(n), "smart": smart}
+            health[n] = {"kernel": kernel_disk_health(n), "smart": self.smart_cache.get(n)}
         journal = journal_disk_errors(names)
         addresses = {}
         out = run(["ip", "-j", "addr"], timeout=3)
@@ -676,7 +730,7 @@ class Collector:
         freqs = [f / 1000 for f in freqs if f]
         if not freqs:
             freqs = [float(x) for x in re.findall(r"cpu MHz\s*:\s*([\d.]+)", read(f"{PROC}/cpuinfo"))]
-        temps = hwmon_temps()
+        temps = hwmon_temps() + [t for ts in list(self.drive_temps.values()) for t in ts]
         pkg = [t for t in temps if t["chip"] in ("coretemp", "k10temp", "zenpower", "cpu_thermal")]
         cpu_temp = max((t["temp"] for t in pkg), default=None)
         load = read(f"{PROC}/loadavg").split()
@@ -731,8 +785,7 @@ class Collector:
             if temp is None and h.get("smart") and h["smart"].get("temp"):
                 temp = h["smart"]["temp"]
             journal = slow["journal"].get(d["name"], [])
-            level, reasons = health_verdict(d["kind"], kernel_disk_health(d["name"]), h.get("smart"), journal, temp,
-                                            self.ioerr_baseline.get(d["name"]))
+            level, reasons = health_verdict(d["kind"], kernel_disk_health(d["name"]), h.get("smart"), journal, temp)
             disks.append({**d, "read_rate": r, "write_rate": w, "busy": busy, "temp": temp, "health": level,
                           "health_reasons": reasons, "kernel": h["kernel"], "smart": h.get("smart"),
                           "journal": journal[-5:]})

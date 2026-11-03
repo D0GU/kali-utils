@@ -12,10 +12,12 @@ import sys
 import time
 from pathlib import Path
 
-from . import __version__, fmt
-from .config import (DEFAULT_URL, ConfigError, _run_password_command, config_path, load_settings,
+from kutil import fmt
+from kutil.fmt import paint
+
+from . import __version__
+from .config import (DEFAULT_URL, ConfigError, run_password_command, config_path, load_settings,
                      normalize_url, read_config_file, write_config)
-from .fmt import paint
 from .rpc import AuthError, Client, RPCError
 
 
@@ -737,7 +739,7 @@ def cmd_setup(args) -> int:
     else:
         password = getpass.getpass("Password (blank keeps the saved one): ") or existing.get("password")
     use_command = bool(existing.get("password_command")) and not password
-    test_password = _run_password_command(existing["password_command"]) if use_command else password
+    test_password = run_password_command(existing["password_command"]) if use_command else password
 
     try:
         session = Client(url, username or None, test_password).session_get(["version"])

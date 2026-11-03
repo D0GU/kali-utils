@@ -14,15 +14,15 @@ import os
 import threading
 import time
 
-from trctl import fmt
-from trctl.tui import (App as TrctlApp, Col, Field, Form, FormError, LineEdit, ListState, Theme, choose, layout,
-                       pad, put, read_key, set_cursor)
+from kutil import fmt
+from kutil.tui import Col, Field, Form, FormError, LineEdit, ListState, Screen, Theme, choose, pad, put, read_key, \
+    set_cursor
 
-from . import config, engine, naming, space
+from . import config, engine, naming
 from .folders_ui import FoldersDialog
 from .db import DB
-from .parse import EXTRA_TYPES, Group, Item, Plan
-from .providers import Match, Matcher, apply_match
+from .parse import EXTRA_TYPES, Group, Item, Plan, media_counts
+from .providers import Match, Matcher, apply_match, similarity
 
 TABS = ["Inbox", "Library", "History"]
 LIB_FILTERS = ["all", "movie", "show", "music"]
@@ -61,22 +61,13 @@ HISTORY
   u                 undo: move files back (optionally re-add the torrent)"""
 
 
-def media_counts(items) -> str:
-    """'3 video(s), 12 track(s)' - names what the files actually are."""
-    tracks = sum(1 for i in items if i.category == "music")
-    videos = len(items) - tracks
-    parts = [f"{videos} video(s)" if videos else "", f"{tracks} track(s)" if tracks else ""]
-    return ", ".join(p for p in parts if p) or "0 files"
-
-
 def title_label(row) -> str:
     if row["category"] == "music":
         return f"{row['artist'] or 'Unknown Artist'} – {naming.title_name(row['title'], row['year'])}"
     return naming.title_name(row["title"], row["year"])
 
 
-class App:
-    box = TrctlApp.box  # same dialog frame as trctl
+class App(Screen):
 
     def __init__(self, scr, cfg: dict, db: DB, client, offline: bool = False):
         self.scr = scr
@@ -228,9 +219,6 @@ class App:
             hints = "⏎ files  u undo (move files back)  ⇥ tabs  ? help  q quit"
         put(self.scr, y, 0, pad(" " + hints, w), self.theme("dim"))
 
-    def table(self, y0, height, width, cols, items, cell, state) -> None:
-        TrctlApp.draw_table(self, y0, height, width, cols, items, cell, state)
-
     def draw_inbox(self, y0: int, height: int, w: int) -> None:
         th = self.theme
         info = f" {len(self.sources)} waiting to be sorted"
@@ -262,7 +250,7 @@ class App:
                     return s.note, th("red")
                 return ("plan in progress", th("yellow")) if s.path in self.plans else ("", 0)
             return "", 0
-        self.table(y0 + 1, height - 1, w, cols, self.sources, cell, self.lists["inbox"])
+        self.draw_table(y0 + 1, height - 1, w, cols, self.sources, cell, self.lists["inbox"])
 
     def lib_visible(self) -> list:
         return self.lib_rows
@@ -320,7 +308,7 @@ class App:
                 if key == "where":
                     return naming.root_of(r["path"], r["category"], self.cfg), th("dim")
                 return "", 0
-            self.table(y0 + 1, height - 1, w, cols, rows, cell, self.lists["library"])
+            self.draw_table(y0 + 1, height - 1, w, cols, rows, cell, self.lists["library"])
         if cursor:
             self.scr.move(*cursor)
         else:
@@ -350,7 +338,7 @@ class App:
             if key == "status":
                 return f["status"], th("green") if f["status"] == "present" else th("red")
             return "", 0
-        self.table(y0 + 3, height - 3, w, cols, self.detail_files, cell, self.lists["files"])
+        self.draw_table(y0 + 3, height - 3, w, cols, self.detail_files, cell, self.lists["files"])
 
     def draw_history(self, y0: int, height: int, w: int) -> None:
         th = self.theme
@@ -377,7 +365,7 @@ class App:
             if key == "torrent":
                 return ("removed" if o["torrent_removed"] else "-"), th("dim")
             return "", 0
-        self.table(y0, height, w, cols, self.ops, cell, self.lists["history"])
+        self.draw_table(y0, height, w, cols, self.ops, cell, self.lists["history"])
 
     # -- main loop -------------------------------------------------------------------
 
@@ -869,34 +857,14 @@ class MatchDialog:
                 return m.info, th("dim")
             return "", 0
 
-        sub = _Sub(scr, y0 + 4, x0 + 1, width - 2)
         if self.results:
-            TrctlApp.draw_table(_SubApp(sub, th), 0, height - 7, width - 2, cols, self.results, cell, self.state,
-                                selected=self.focus == 4)
+            app.draw_table(y0 + 4, height - 7, width - 2, cols, self.results, cell, self.state,
+                           selected=self.focus == 4, x0=x0 + 1)
         put(scr, y0 + height - 2, x0 + 2,
             pad("Enter search/choose · Tab next field · ↓ results · ←→ type/source · i ids by hand · "
                 "albums: “Artist - Album” · Esc cancel",
                 width - 4), th("dim"))
         return cursor
-
-
-class _Sub:
-    """A window-like view onto a rectangle of stdscr (so trctl's table drawer can be reused)."""
-
-    def __init__(self, scr, y, x, w):
-        self.scr, self.y, self.x, self.w = scr, y, x, w
-
-    def getmaxyx(self):
-        return (self.scr.getmaxyx()[0] - self.y, self.w)
-
-    def addstr(self, y, x, text, attr=0):
-        self.scr.addstr(self.y + y, self.x + x, text, attr)
-
-
-class _SubApp:
-    def __init__(self, sub, theme):
-        self.scr = sub
-        self.theme = theme
 
 
 # --------------------------------------------------------------------------
@@ -1200,6 +1168,12 @@ class Review:
         if (match.category == "music") != (g.category == "music"):
             app.flash("That result is a different kind of title (music vs video)", "error")
             return
+        if match.category == "music" and g.artist and g.artist != "Unknown Artist" \
+                and similarity(g.artist, match.artist) < 0.5:
+            if choose(app, "Different artist", [f"Your files say: {g.artist}", f"This release is by: {match.artist}",
+                                                "", "The files will be filed under that artist."],
+                      [("y", f"Use {match.artist} anyway", "red"), ("Esc", "Cancel", "dim")], default=1) != "y":
+                return
         items = list(g.items)
         app.run_task("Applying match", lambda log: (log("Fetching episode list…"),
                                                      apply_match(items, match, app.matcher)))

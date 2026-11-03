@@ -17,7 +17,7 @@ sys.path.insert(0, str(ROOT / "tests" / "trctl"))
 
 from fake_daemon import FakeDaemon  # noqa: E402
 from serve_fake import demo_torrents  # noqa: E402
-from trctl.tui import Col, Field, FormError, LineEdit, ListState, complete_path, layout  # noqa: E402
+from kutil.tui import Col, Field, FormError, LineEdit, ListState, complete_path, layout  # noqa: E402
 
 
 class TestLineEdit(unittest.TestCase):

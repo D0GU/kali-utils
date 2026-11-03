@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import os
 
-from trctl import fmt
-from trctl.tui import Field, Form, ListState, choose, pad, put, read_key, set_cursor
+from kutil import fmt
+from kutil.tui import Field, Form, ListState, choose, pad, put, read_key, set_cursor
 
 from . import space
 

@@ -10,6 +10,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]  # kali-utils root
 sys.path.insert(0, str(ROOT))
@@ -57,15 +58,15 @@ class TestParsers(unittest.TestCase):
 
 class TestHealth(unittest.TestCase):
     def test_boot_errors_are_informational(self):
-        level, reasons = collect.health_verdict("HDD", {"state": "running", "ioerr_cnt": 4}, None, [], None, 4)
+        level, reasons = collect.health_verdict("HDD", {"state": "running", "ioerr_cnt": 4}, None, [], None)
         self.assertEqual(level, "ok")
         self.assertIn("since boot", reasons[-1])
 
     def test_kernel_log_and_heat_warn_but_command_counter_does_not(self):
-        level, _ = collect.health_verdict("HDD", {"state": "running", "ioerr_cnt": 60}, None, [], None, 4)
+        level, _ = collect.health_verdict("HDD", {"state": "running", "ioerr_cnt": 60}, None, [], None)
         self.assertEqual(level, "ok")  # smartctl passthrough bumps this counter; it's not a disk error
         level, reasons = collect.health_verdict("HDD", {"state": "running", "ioerr_cnt": 6}, None,
-                                                ["I/O error, dev sda"], 58, 4)
+                                                ["I/O error, dev sda"], 58)
         self.assertEqual(level, "warn")
         self.assertEqual(len([r for r in reasons if "informational" not in r]), 2)
 
@@ -88,6 +89,61 @@ class TestHealth(unittest.TestCase):
         self.assertEqual(collect.health_verdict("SSD", {"state": "running"},
                                                 {"available": True, "failing": True}, [], None)[0], "fail")
         self.assertEqual(collect.health_verdict("SSD", {"state": "offline"}, None, [], None)[0], "fail")
+
+
+class TestDrivePolling(unittest.TestCase):
+    def test_should_poll_rules(self):
+        self.assertTrue(collect.should_poll(True, 100, None, 5, 600))              # never read yet
+        self.assertFalse(collect.should_poll(False, 100, (0, 5), 9, 600))          # too soon
+        self.assertFalse(collect.should_poll(True, 700, (0, 5), 5, 600))           # idle HDD: leave it alone
+        self.assertTrue(collect.should_poll(True, 700, (0, 5), 6, 600))            # HDD did work: it's awake
+        self.assertTrue(collect.should_poll(False, 700, (0, 5), 5, 600))           # SSDs have nothing to wake
+        self.assertTrue(collect.should_poll(True, 100, (0, 5), 5, 600, force=True))
+
+    def fake_sys(self, tmp):
+        sysfs = Path(tmp)
+        (sysfs / "hwmon_dev" / "block" / "sda").mkdir(parents=True)
+        for name, dev, reading in (("drivetemp", "hwmon_dev", "36000"), ("coretemp", None, "41000")):
+            chip = sysfs / "class" / "hwmon" / ("hwmon0" if dev else "hwmon1")
+            chip.mkdir(parents=True)
+            (chip / "name").write_text(name + "\n")
+            (chip / "temp1_input").write_text(reading + "\n")
+            if dev:
+                (chip / "device").symlink_to(sysfs / dev)
+        return str(sysfs)
+
+    def test_regular_samples_never_touch_drivetemp(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(collect, "SYS", self.fake_sys(tmp)):
+            self.assertEqual([t["chip"] for t in collect.hwmon_temps()], ["coretemp"])
+            self.assertEqual([t["chip"] for t in collect.hwmon_temps(drive_temps=True)], ["drivetemp"])
+            self.assertEqual(collect.hwmon_temps(drive_temps=True, only_disks={"sdb"}), [])
+
+    def test_idle_hdd_gets_no_smart_queries_until_it_works_or_is_asked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = Path(tmp)
+            stats = lambda n: (proc / "diskstats").write_text(f"   8 0 sda {n} 0 8 1 0 0 0 0 0 1 1 0 0 0 0\n")
+            stats(10)
+            os.makedirs(tmp + "/sys")
+            with mock.patch.object(collect, "PROC", str(proc)), \
+                    mock.patch.object(collect, "SYS", self.fake_sys(tmp + "/sys")), \
+                    mock.patch.object(collect, "smartctl_health", return_value={"available": True}) as smart, \
+                    mock.patch.object(collect, "journal_disk_errors", return_value={}), \
+                    mock.patch.object(collect, "run", return_value=None):
+                c = collect.Collector(slow=False)
+                c.pci = []
+                c.disks = [{"name": "sda", "kind": "HDD", "model": "x", "size": 1, "transport": "sata", "serial": ""}]
+                c.collect_slow(now=1000)
+                self.assertEqual(smart.call_count, 1)                # first read
+                self.assertEqual(c.drive_temps["sda"][0]["temp"], 36.0)
+                c.collect_slow(now=5000)
+                self.assertEqual(smart.call_count, 1)                # idle: not touched, cached values stay
+                self.assertEqual(c.slow["health"]["sda"]["smart"], {"available": True})
+                stats(11)
+                c.collect_slow(now=5100)
+                self.assertEqual(smart.call_count, 2)                # it did work, so it's awake anyway
+                c.refresh_slow()
+                c.collect_slow(now=5101)
+                self.assertEqual(smart.call_count, 3)                # r: read now
 
 
 class TestFormatting(unittest.TestCase):

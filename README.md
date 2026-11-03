@@ -30,7 +30,8 @@ sudo bash ~/scripts/syswatch-enable-health.sh # optional: SMART data and drive t
 ## Layout
 
 ```
-trctl/      Transmission RPC client, config, formatting, curses UI   (other tools reuse rpc/config/tui widgets)
+kutil/      shared formatting and curses widgets (keys, forms, dialogs, tables)
+trctl/      Transmission RPC client, config and curses UI   (plexsort reuses its client and config)
 plexsort/   parsing, online providers, music/tags, naming, placement, engine, database, curses UI
 syswatch/   collectors (/proc, /sys, nvidia-smi, smartctl), alerts, curses UI
 bin/        launchers used by install.sh

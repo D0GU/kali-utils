@@ -77,6 +77,8 @@ The verdict (✓ ok / ! warning / ✗ FAILING) combines:
 - **SMART:** the failing flag, any attribute past its threshold, and each worrying counter that isn't 0 (see the drive report), plus NVMe warnings, media errors and spare blocks. Read through UDisks2 when it provides them, or `smartctl` (see below).
 - **Temperature:** warns at 55°C for HDDs and 70°C for SSDs.
 
+To let an idle hard disk spin down, syswatch doesn't query drives constantly. SMART is read every 10 minutes and drive temperatures every minute, and a spinning disk is only queried if it has done real I/O since the last query. Values for an idle disk can therefore be older. Each start of syswatch does one first read, which can wake a sleeping disk, as can `r` and opening the drive report.
+
 SMART needs root. To enable it, plus drive temperatures, run once:
 
 ```bash

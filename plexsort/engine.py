@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 
 from . import naming, space
 from .db import DB
-from .parse import Item, Plan, Sub, build_items
+from .parse import Item, Plan, build_items
 from .providers import Matcher, ProviderError, apply_match, download_cover
 from .tags import read_tags
 
@@ -531,7 +531,6 @@ ALBUM_DIR_RE = re.compile(r"^(?P<title>.+?)(?: \((?P<year>\d{4})\))?$")
 
 
 def scan_music(cfg: dict, db: DB) -> int:
-    from .music import ART_EXT, AUDIO_EXT
     added = 0
     for base in naming.library_roots("music", cfg):
         if os.path.isdir(base):
@@ -625,10 +624,3 @@ def scan_library(cfg: dict, db: DB) -> tuple[int, int]:
         if os.path.exists(row["dst"]):
             db.update_file(row["id"], status="present")
     return added, missing
-
-
-def forget_missing(db: DB) -> int:
-    n = db.conn.execute("DELETE FROM files WHERE status = 'missing'").rowcount
-    db.conn.commit()
-    db.prune_titles()
-    return n

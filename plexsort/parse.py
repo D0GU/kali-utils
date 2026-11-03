@@ -50,10 +50,15 @@ EXTRA_RES = [
     ("other", re.compile(r"(?i)(?<![a-z])(nc ?op\d*|nc ?ed\d*|creditless|clean (?:opening|ending)|"
                          r"music[ ._-]videos?|extras?|bonus|menus?|bloopers|gag reel|openings?|endings?)(?![a-z])")),
 ]
-GENERIC_DIR_RE = re.compile(r"(?i)^(series|episodes?|tv|tv series|tv show|anime|shows?|complete|"
+GENERIC_DIR_RE = re.compile(r"(?i)^(series|seasons?|episodes?|tv|tv series|tv show|anime|shows?|complete|"
                             r"disc ?\d*|cd ?\d*|bd ?\d*|dvd ?\d*|subs?|subtitles?|video|videos|media|main)$")
-MARKETING_RE = re.compile(r"(?i)\s*[-–:]?\s*(?:the\s+)?(?:complete|collection|box ?set|anthology|"
-                          r"(?:tv|anime)?\s*series pack|pack)\b.*$")
+MARKETING_RE = re.compile(r"(?i)\s*(?:[-–:]\s*(?:the\s+)?(?:\w+\s+)?pack\b|[-–:]?\s*(?:the\s+)?"
+                          r"(?:complete|collection|box ?set|anthology|(?:tv|anime|movie)?\s*series pack)\b).*$")
+# "Show S01", "Show (S1+S2)", "Show Season 2", "Show Seasons 1-3": everything from there on isn't the title
+SEASON_TOKEN_RE = re.compile(r"(?i)(?<=\S)[\s._\-(\[]+(?:s\d{1,2}(?:\s*[-+&~]\s*s?\d{1,2})*(?:\s*e\d+)?|"
+                             r"seasons?\s*\d{1,2}(?:\s*[-+&~]\s*\d{1,2})*)"
+                             r"(?=\s*(?:$|[)\]\[(-]|complete\b)).*$")
+YEAR_OR_RANGE_RE = re.compile(r"\(?\s*(?:19|20)\d\d(?:\s*[-–~]\s*(?:19|20)\d\d)?\s*\)?")
 ANIME_HINT_RE = re.compile(r"(?i)(^\s*\[[^\]]+\])|(?<![a-z])(ova|oad|ncop|nced|creditless|anime|subsplease|"
                            r"erai-raws|horriblesubs|dual[ .-]?audio|\(cbb\)|bd ?1080p|fansub|-hen)(?![a-z])")
 
@@ -224,6 +229,11 @@ def smart_case(s: str) -> str:
     return s
 
 
+def main_artist(name: str) -> str:
+    """'Daft Punk feat. Pharrell Williams' -> 'Daft Punk' (one artist should stay one artist in Plex)."""
+    return re.split(r"(?i)\s+(?:feat\.?|ft\.?|featuring|starring)\s+", name or "", maxsplit=1)[0].strip()
+
+
 def clean_title(raw: str, cut_marketing: bool = True, recase: bool = True) -> tuple[str, int | None]:
     """Turn a release name into (title, year)."""
     s = despace(strip_tags(raw))
@@ -247,7 +257,8 @@ def clean_title(raw: str, cut_marketing: bool = True, recase: bool = True) -> tu
     title = re.sub(r"[\[({][^\])}]*$", "", title)
     title = re.sub(r"\[[^\]]*\]", "", title)
     if cut_marketing:
-        title = MARKETING_RE.sub("", title)
+        title = SEASON_TOKEN_RE.sub("", title.rstrip(" ._-")) or title
+        title = MARKETING_RE.sub("", title) or title   # "The Complete Savages" must not vanish entirely
     title = title.strip(" -_.,:;([{~")
     title = re.sub(r"\s+", " ", title)
     return (smart_case(title) if recase else title), year
@@ -282,9 +293,9 @@ def _meaningful_dir(dirs: list[str]) -> tuple[str, int | None] | None:
         name = strip_numbering(despace(strip_tags(d)))
         if not name or name.isdigit() or GENERIC_DIR_RE.match(name):
             continue
-        if SEASON_RE.search(name) and len(SEASON_RE.sub("", name).strip(" -_.")) < 3:
+        bare = YEAR_OR_RANGE_RE.sub("", name).strip(" -_.")   # "Season 17 (2013-2014)" -> "Season 17"
+        if SEASON_RE.search(bare) and len(SEASON_RE.sub("", bare).strip(" -_.")) < 3:
             continue
-        bare = re.sub(r"\(?\s*(19|20)\d\d\s*\)?", "", name).strip(" -_.")
         if (MOVIE_RE.fullmatch(bare) or SPECIAL_RE.fullmatch(bare) or extra_type_of(bare) == bare.lower()
                 or GENERIC_DIR_RE.match(bare) or not bare):
             continue
@@ -302,8 +313,10 @@ def _season_from_dirs(dirs: list[str]) -> int | None:
     return None
 
 
-def _dir_year(dirs: list[str]) -> int | None:
+def _dir_year(dirs: list[str], skip_seasons: bool = False) -> int | None:
     for d in reversed(dirs):
+        if skip_seasons and SEASON_RE.search(YEAR_OR_RANGE_RE.sub("", strip_numbering(despace(d))).strip()):
+            continue   # "Season 17 (2013)" dates that season, not the show
         if y := find_year(d):
             return y
     return None
@@ -429,7 +442,7 @@ def _assign_show_title(item: Item, prefix: str, dirs: list[str], root_name: str)
         title, year = clean_title(root_name)
         item.title_source = "root"
     item.title = title
-    item.year = _dir_year(dirs) or year
+    item.year = _dir_year(dirs, skip_seasons=True) or year
     if item.year is None and item.title_source != "root" and not YEAR_RANGE_RE.search(root_name):
         item.year = find_year(root_name)
 
@@ -552,7 +565,7 @@ def _unify(items: list[Item], root_name: str) -> None:
             members = [i for i in shows if i._key == key]  # type: ignore[attr-defined]
             title = Counter(i.title for i in members).most_common(1)[0][0]
             years = [i.year for i in members if i.year]
-            year = Counter(years).most_common(1)[0][0] if years else None
+            year = min(years) if years else None   # a show's year is when it began
             for i in members:
                 i.title, i.year = title, year
     show_titles = Counter((i.title, i.year) for i in shows)
@@ -583,5 +596,9 @@ def _number_specials(items: list[Item]) -> None:
                 it.episode = n
 
 
-def is_anime_name(name: str) -> bool:
-    return bool(ANIME_HINT_RE.search(name))
+def media_counts(items) -> str:
+    """'3 video(s), 12 track(s)' - names what the files actually are."""
+    tracks = sum(1 for i in items if i.category == "music")
+    videos = len(items) - tracks
+    parts = [f"{videos} video(s)" if videos else "", f"{tracks} track(s)" if tracks else ""]
+    return ", ".join(p for p in parts if p) or "0 files"

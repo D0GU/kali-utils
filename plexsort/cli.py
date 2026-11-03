@@ -7,15 +7,15 @@ import json
 import os
 import sys
 
-from trctl import fmt
+from kutil import fmt
+from kutil.fmt import paint
 from trctl.config import ConfigError, load_settings
-from trctl.fmt import paint
 from trctl.rpc import Client, RPCError
 
 from . import __version__, config, engine, naming
 from .db import DB
-from .parse import Plan
-from .providers import Matcher, apply_match
+from .parse import Plan, media_counts
+from .providers import Matcher
 
 
 class CLIError(Exception):
@@ -86,7 +86,6 @@ def print_plan(plan: Plan, cfg: dict) -> engine.Check:
             print(f"  {paint(it.src, 'dim')}\n    → {dst}{subs}{flag}")
     skipped = plan.skipped()
     if skipped or plan.leftovers:
-        from .tui import media_counts
         print(paint(f"\nNot moved: {media_counts(skipped)} skipped, {len(plan.leftovers)} other file(s) "
                     f"({fmt.human_size(sum(s for _, s in plan.leftovers))})", "dim"))
     for e in check.global_errors:

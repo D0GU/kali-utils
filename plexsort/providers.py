@@ -27,9 +27,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import __version__
-from .parse import Group, Item, normalize
+from .parse import Group, Item, main_artist, normalize
 
-USER_AGENT = f"plexsort/{__version__}"
+USER_AGENT = f"plexsort/{__version__} ( https://github.com/D0GU/kali-utils )"  # MusicBrainz asks for a contact URL
 DAY = 86400
 ANIME_MAP_URL = "https://raw.githubusercontent.com/Fribb/anime-lists/master/anime-list-full.json"
 
@@ -53,7 +53,8 @@ class Match:
     tvdb_season: int | None = None
     score: float = 0.0
     popularity: float = 0.0        # 0..1 where the provider reports it (tie-breaker)
-    artist: str = ""               # music: album artist
+    artist: str = ""               # music: full credit, e.g. "Daft Punk feat. Pharrell Williams"
+    album_artist: str = ""         # music: main artist only; names the folder
     tracks: int | None = None      # music: track count of the release
 
     def label(self) -> str:
@@ -111,7 +112,7 @@ class Http:
             req.add_header("Content-Type", "application/json")
         for k, v in (headers or {}).items():
             req.add_header(k, v)
-        for attempt in range(3):
+        for attempt in range(4):
             self._last[host] = time.monotonic()
             try:
                 with urllib.request.urlopen(req, timeout=timeout or self.timeout) as resp:
@@ -121,8 +122,12 @@ class Http:
                 if e.code == 404:
                     result = None
                     break
-                if e.code == 429 and attempt < 2:
-                    time.sleep(float(e.headers.get("Retry-After") or 2) + 0.5)
+                if e.code in (429, 503) and attempt < 3:   # rate limited or briefly overloaded
+                    try:
+                        delay = float(e.headers.get("Retry-After") or 0)
+                    except ValueError:
+                        delay = 0
+                    time.sleep(min(30.0, delay or 2.0 ** (attempt + 1)) + 0.5)
                     continue
                 if e.code == 401:
                     raise ProviderError(f"{host}: unauthorized - check the API key") from None
@@ -398,6 +403,14 @@ def _credit(credits: list | None) -> str:
                    for c in credits or []).strip()
 
 
+def _primary(credits: list | None) -> str:
+    """The first credited artist: 'Daft Punk' for 'Daft Punk feat. Pharrell Williams'."""
+    if not credits:
+        return ""
+    c = credits[0]
+    return (c.get("name") or (c.get("artist") or {}).get("name", "")).strip()
+
+
 def _lucene(s: str) -> str:
     return s.replace("\\", " ").replace('"', " ")
 
@@ -410,18 +423,13 @@ class MusicBrainz:
         self.http = http
 
     def search(self, album: str, artist: str | None = None) -> list[Match]:
-        queries = []
+        """One query; with `artist` it only finds that artist's releases (Matcher decides when to widen)."""
+        q = f'release:"{_lucene(album)}"'
         if artist and normalize(artist) not in ("unknown artist", ""):
-            name = "Various Artists" if normalize(artist) == "various artists" else artist
-            queries.append(f'release:"{_lucene(album)}" AND artist:"{_lucene(name)}"')
-        queries.append(f'release:"{_lucene(album)}"')
-        for q in queries:
-            data = self.http.request(f"{self.base}/release/", params={"query": q, "fmt": "json", "limit": 25},
-                                     min_interval=1.1) or {}
-            releases = data.get("releases") or []
-            if releases:
-                return [self._match(r) for r in releases]
-        return []
+            q += f' AND artist:"{_lucene(artist)}"'
+        data = self.http.request(f"{self.base}/release/", params={"query": q, "fmt": "json", "limit": 25},
+                                 min_interval=1.1) or {}
+        return [self._match(r) for r in data.get("releases") or []]
 
     def _match(self, r: dict) -> Match:
         media = r.get("media") or []
@@ -433,13 +441,14 @@ class MusicBrainz:
         info = " · ".join(x for x in (formats, f"{len(media)} disc(s)" if len(media) > 1 else "", r.get("country") or "",
                                        rg.get("primary-type") or "", (r.get("disambiguation") or "")[:30]) if x)
         return Match("MusicBrainz", r["id"], "music", r.get("title") or "?", _year(r.get("date")), ids, info,
-                     artist=_credit(r.get("artist-credit")), tracks=r.get("track-count"))
+                     artist=_credit(r.get("artist-credit")), album_artist=_primary(r.get("artist-credit")),
+                     tracks=r.get("track-count"))
 
     def tracklist(self, mbid: str) -> tuple[list[Track], int | None, str]:
         data = self.http.request(f"{self.base}/release/{mbid}",
                                  params={"inc": "recordings+artist-credits+release-groups", "fmt": "json"},
                                  min_interval=1.1, ttl=30 * DAY) or {}
-        album_artist = _credit(data.get("artist-credit"))
+        album_artist = _primary(data.get("artist-credit"))
         year = _year((data.get("release-group") or {}).get("first-release-date")) or _year(data.get("date"))
         tracks = []
         for disc_no, medium in enumerate(data.get("media") or [], start=1):
@@ -622,7 +631,7 @@ def score_match(m: Match, queries: list[str], year: int | None, category: str) -
 def score_music(m: Match, queries: list[str], artist: str | None, year: int | None, tracks: int | None) -> float:
     album_sim = max(similarity(q, m.title) for q in queries)
     if artist and normalize(artist) not in ("unknown artist", ""):
-        artist_sim = similarity(artist, m.artist)
+        artist_sim = max(similarity(artist, m.artist), similarity(artist, m.album_artist or m.artist))
         if normalize(artist) == "various artists" and normalize(m.artist) in ("various artists", "va"):
             artist_sim = 1.0
     else:
@@ -694,9 +703,14 @@ class Matcher:
             if name == "MyAnimeList" and not provider and any(r.provider == "AniList" for r in results):
                 continue  # Jikan is only a fallback for when AniList has nothing
             found: list[Match] = []
-            for v in variants[:5]:
+            # for albums, every spelling of the title with the artist comes before dropping the artist;
+            # otherwise "One More Time - Single" finds a stranger's release of exactly that name first
+            attempts = [(v, artist) for v in variants[:5]]
+            if name == "MusicBrainz" and artist:
+                attempts += [(v, None) for v in variants[:5]]
+            for v, who in attempts:
                 try:
-                    found = fn(v, year) if name == "TMDB" else fn(v, artist) if name == "MusicBrainz" else fn(v)
+                    found = fn(v, year) if name == "TMDB" else fn(v, who) if name == "MusicBrainz" else fn(v)
                 except ProviderError as e:
                     self.errors.append(f"{name}: {e}")
                     break
@@ -746,9 +760,6 @@ class Matcher:
         return sorted(uniq.values(), key=lambda m: (-m.score, edition_rank(m), m.year or 9999))
 
     def best(self, group: Group) -> Match | None:
-        if group.category == "movie" and not self.tmdb and not group.anime:
-            # No TMDB key: still try AniList (anime films are common in packs), but don't auto-accept weak hits.
-            pass
         if group.category == "music":
             results = self.search(group.title, "music", group.year, artist=group.artist,
                                   tracks=sum(1 for i in group.items if i.kind == "track"))
@@ -785,6 +796,58 @@ class Matcher:
         return []
 
 
+def _version(title: str) -> str:
+    """'One More Time (Radio Edit)' -> 'radio edit'. Featured-artist notes aren't a version."""
+    parts = re.findall(r"[(\[]([^)\]]*)[)\]]", title or "")
+    return " ".join(sorted(normalize(p) for p in parts if not re.match(r"(?i)\s*(feat\.?|ft\.?|featuring|with)\s", p)))
+
+
+def _bare_title(title: str) -> str:
+    return normalize(re.sub(r"[(\[][^)\]]*[)\]]", " ", title or ""))
+
+
+def match_tracks(items: list[Item], tracks: list[Track]) -> dict[int, Track]:
+    """Pair files with release tracks, each track used at most once. Returns {id(item): track}.
+
+    Order: identical title; then same disc+number if the titles agree; then a close title of the same
+    version. 'One More Time (Radio Edit)' and '(Club Mix)' are different recordings, so they can't both
+    become the release's 'One More Time' and overwrite each other's destination.
+    """
+    free = list(tracks)
+    pairs: dict[int, Track] = {}
+    files = [it for it in items if it.kind == "track"]
+
+    def take(it, t):
+        pairs[id(it)] = t
+        free.remove(t)
+
+    def same_slot(it, t):
+        return t.disc == (it.disc or 1) and t.number == it.track
+
+    for it in files:   # identical titles first, preferring the same position
+        hits = [t for t in free if normalize(t.title) == normalize(it.track_title)]
+        if hits:
+            take(it, next((t for t in hits if same_slot(it, t)), hits[0]))
+
+    def compatible(a: str, b: str) -> bool:
+        va, vb = _version(a), _version(b)
+        return not (va and vb and va != vb) and (not a or similarity(_bare_title(a), _bare_title(b)) >= 0.5
+                                                 or normalize(a).isdigit())
+
+    for it in files:   # same position, as long as it isn't obviously another song or version
+        if id(it) not in pairs and it.track is not None:
+            t = next((t for t in free if same_slot(it, t)), None)
+            if t and compatible(it.track_title, t.title):
+                take(it, t)
+    for it in files:   # close spelling, same version
+        if id(it) in pairs or not it.track_title or not free:
+            continue
+        best = max(free, key=lambda t: similarity(t.title, it.track_title))
+        if _version(best.title) == _version(it.track_title) and similarity(best.title, it.track_title) >= 0.75:
+            take(it, best)
+    return pairs
+
+
 def apply_music_match(items: list[Item], match: Match, matcher: Matcher | None = None) -> None:
     tracks, year, album_artist = ([], None, "")
     if matcher is not None:
@@ -792,9 +855,9 @@ def apply_music_match(items: list[Item], match: Match, matcher: Matcher | None =
             tracks, year, album_artist = matcher.musicbrainz.tracklist(match.pid)
         except ProviderError as e:
             matcher.errors.append(str(e))
-    album_artist = album_artist or match.artist
+    album_artist = album_artist or match.album_artist or main_artist(match.artist)
     multi = len({t.disc for t in tracks}) > 1
-    by_pos = {(t.disc, t.number): t for t in tracks}
+    pairs = match_tracks(items, tracks)
     for it in items:
         it.title = match.title
         it.artist = album_artist
@@ -804,22 +867,15 @@ def apply_music_match(items: list[Item], match: Match, matcher: Matcher | None =
         it.category = "music"
         if it.kind != "track" or not tracks:
             continue
-        t = by_pos.get((it.disc or 1, it.track)) if it.track is not None else None
-        if t is None or (it.track_title and similarity(t.title, it.track_title) < 0.5):
-            by_title = max(tracks, key=lambda tr: similarity(tr.title, it.track_title or ""))
-            if it.track_title and similarity(by_title.title, it.track_title) >= 0.75:
-                t = by_title
-            elif t is not None and it.track_title and similarity(t.title, it.track_title) < 0.5 and \
-                    not normalize(it.track_title).isdigit():
-                t = None
+        t = pairs.get(id(it))
         if t:
             it.track_title = t.title
             it.track = t.number
             it.disc = t.disc if multi else None
-            it.track_artist = t.artist if normalize(t.artist) != normalize(album_artist) else ""
+            it.track_artist = t.artist if normalize(main_artist(t.artist)) != normalize(album_artist) else ""
             it.ep_found = True
         else:
-            it.ep_found = False
+            it.ep_found = False   # keeps its own title and number; flagged in the review screen
 
 
 def apply_match(items: list[Item], match: Match, matcher: Matcher | None = None) -> None:

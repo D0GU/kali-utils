@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # kali-utils root
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from fake_daemon import FakeDaemon, make_torrent  # noqa: E402
-from trctl import fmt  # noqa: E402
+from kutil import fmt  # noqa: E402
 from trctl.cli import CLIError, main, parse_file_spec  # noqa: E402
 from trctl.config import normalize_url  # noqa: E402
 

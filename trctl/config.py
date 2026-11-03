@@ -67,7 +67,7 @@ def read_config_file(path: Path | None = None) -> dict:
     return data
 
 
-def _run_password_command(cmd: str) -> str:
+def run_password_command(cmd: str) -> str:
     try:
         out = subprocess.run(shlex.split(cmd), capture_output=True, text=True, check=True)
     except (OSError, subprocess.CalledProcessError) as e:
@@ -89,7 +89,7 @@ def load_settings(cli_url: str | None = None, cli_user: str | None = None) -> Se
     elif file.get("password") is not None and (not cli_user or cli_user == file.get("username")):
         s.password = str(file["password"])
     elif file.get("password_command") and (not cli_user or cli_user == file.get("username")):
-        s.password = _run_password_command(file["password_command"])
+        s.password = run_password_command(file["password_command"])
 
     if s.username and s.password is None and sys.stdin.isatty():
         s.password = getpass.getpass(f"Password for {s.username}: ")

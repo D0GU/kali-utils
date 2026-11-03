@@ -86,6 +86,38 @@ class TestParse(unittest.TestCase):
         double = build_items("Root", [("Show.Name.S01E01E02.1080p.mkv", 1)])[0][0]
         self.assertEqual(double.episode_end, 2)
 
+    def test_season_tokens_are_not_part_of_the_title(self):
+        self.assertEqual(clean_title("Cautious Hero S01 1080p Dual Audio BDRip 10 bits AAC x265-EMBER")[0], "Cautious Hero")
+        self.assertEqual(clean_title("The Eminence in Shadow (S1+S2) [BD] [AV1]")[0], "The Eminence in Shadow")
+        self.assertEqual(clean_title("Some Show Season 2 720p")[0], "Some Show")
+        self.assertEqual(clean_title("Some Show Seasons 1-3")[0], "Some Show")
+        self.assertEqual(clean_title("S1m0ne.2002.1080p")[0], "S1m0ne")
+        self.assertEqual(clean_title("Area S4 Documentary")[0], "Area S4 Documentary")
+        self.assertEqual(clean_title("Show.S02.1080p.WEB-DL")[0], "Show")
+        self.assertEqual(clean_title("Show S01 Complete 720p")[0], "Show")
+
+    def test_marketing_words_only_when_they_are_marketing(self):
+        self.assertEqual(clean_title("Wolf Pack 1080p")[0], "Wolf Pack")
+        self.assertEqual(clean_title("The Complete Savages")[0], "The Complete Savages")
+        self.assertEqual(clean_title("Gundam Series - Anime Pack 720p")[0], "Gundam Series")
+        self.assertEqual(clean_title("Some Show - The Complete Series (BD)")[0], "Some Show")
+
+    def test_season_folders_with_years_are_not_shows(self):
+        files = ["Seasons/Season 01 (2003-2004)/Pack Show S01E01 Pilot.mkv",
+                 "Seasons/Season 01 (2003-2004)/Pack Show SP1 - Special One.mkv",
+                 "Seasons/Season 17 (2013-2014)/Pack Show S17E01 Later.mkv",
+                 "Seasons/Season 17 (2013-2014)/05 - Numbered.mkv", "Seasons/Season 17 (2013-2014)/06 - Numbered Too.mkv"]
+        items = {i.src: i for i in build_items("Pack Show", [(f, 10 ** 9) for f in files])[0]}
+        self.assertEqual({i.title for i in items.values()}, {"Pack Show"})
+        eps = [i for i in items.values() if i.kind == "episode" and i.season]
+        self.assertEqual({i.year for i in eps}, {None})   # a season's year doesn't date the show
+        self.assertEqual(items[files[2]].season, 17)
+
+    def test_show_year_is_when_it_began(self):
+        files = ["Show (2001)/Season 2/Show S02E01.mkv", "Show (2003)/Season 3/Show S03E01.mkv"]
+        items = build_items("Pack", [(f, 10 ** 9) for f in files])[0]
+        self.assertEqual({(i.title, i.year) for i in items}, {("Show", 2001)})
+
     def test_samples_and_part_files(self):
         items, _, incomplete = build_items("Movie.2020", [("Movie.2020.mkv", 4_000_000_000),
                                                           ("Sample/movie-sample.mkv", 50_000_000),

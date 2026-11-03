@@ -11,7 +11,7 @@ import os
 import re
 from collections import Counter
 
-from .parse import YEAR_RE, Item, despace, find_year, normalize, smart_case, strip_numbering
+from .parse import YEAR_RE, Item, despace, find_year, main_artist, normalize, smart_case, strip_numbering
 
 AUDIO_EXT = {".flac", ".mp3", ".m4a", ".aac", ".ogg", ".oga", ".opus", ".wav", ".aiff", ".aif", ".wma", ".ape",
              ".wv", ".alac", ".dsf", ".dff", ".mka"}
@@ -119,14 +119,14 @@ def unify_albums(tracks: list[Item]) -> None:
             return Counter(values).most_common(1)[0][0] if values else None
         album = common(m.title for m in members) or "Unknown Album"
         year = common(m.year for m in members)
-        artists = {normalize(m.artist) for m in members if m.artist}
+        artists = {normalize(main_artist(m.artist)) for m in members if m.artist}
         has_aa = any(m.albumartist_tag for m in members)
         if any(m.compilation for m in members) or (len(artists) > 1 and not has_aa):
             album_artist = "Various Artists"
             for m in members:
                 m.track_artist = m.track_artist or m.artist
         else:
-            album_artist = common(m.artist for m in members)
+            album_artist = main_artist(common(m.artist for m in members) or "")
             if not album_artist:
                 prefixes = Counter(getattr(m, "file_prefix", "") for m in members)
                 prefix, n = prefixes.most_common(1)[0]
@@ -140,7 +140,7 @@ def unify_albums(tracks: list[Item]) -> None:
                     album_artist = "Unknown Artist"
         for m in members:
             m.title, m.year, m.artist = album, year, album_artist
-            if m.track_artist and normalize(m.track_artist) == normalize(album_artist):
+            if m.track_artist and normalize(main_artist(m.track_artist)) == normalize(album_artist):
                 m.track_artist = ""
         discs = {m.disc for m in members if m.disc}
         if len(discs) <= 1 and not any((m.disc_total or 0) > 1 for m in members):

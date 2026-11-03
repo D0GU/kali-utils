@@ -6,7 +6,9 @@ import curses
 import locale
 import os
 import time
-import unicodedata
+
+from kutil.fmt import bar, human_size as size, text_width as tw, truncate as trunc
+from kutil.tui import Theme, pad, put
 
 from .alerts import LEVELS, AlertEngine
 from .collect import Collector, ProcessSampler
@@ -33,42 +35,6 @@ HELP = """\
 # Formatting helpers
 # --------------------------------------------------------------------------
 
-def tw(s: str) -> int:
-    return sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in s)
-
-
-def trunc(s: str, width: int) -> str:
-    if width <= 0:
-        return ""
-    if tw(s) <= width:
-        return s
-    out, w = [], 0
-    for c in s:
-        cw = tw(c)
-        if w + cw > width - 1:
-            break
-        out.append(c)
-        w += cw
-    return "".join(out) + "…"
-
-
-def pad(s: str, width: int, align: str = "<") -> str:
-    s = trunc(s, width)
-    space = " " * max(0, width - tw(s))
-    return space + s if align == ">" else s + space
-
-
-def size(n) -> str:
-    if n is None:
-        return "-"
-    n = float(n)
-    for unit in ("B", "KiB", "MiB", "GiB", "TiB", "PiB"):
-        if abs(n) < 1024 or unit == "PiB":
-            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
-        n /= 1024
-    return "?"
-
-
 def rate(n) -> str:
     return size(n) + "/s"
 
@@ -93,14 +59,6 @@ def duration(seconds: float) -> str:
     return f"{d}d {h}h" if d else f"{h}h {m}m" if h else f"{m}m"
 
 
-def bar(frac: float, width: int) -> str:
-    frac = max(0.0, min(1.0, frac or 0.0))
-    eighths = int(round(frac * width * 8))
-    full, part = divmod(eighths, 8)
-    partial = " ▏▎▍▌▋▊▉"[part] if part and full < width else ""
-    return ("█" * full + partial).ljust(width, "·")
-
-
 def sparkline(values, width: int, top: float | None = None) -> str:
     vals = list(values)[-width:] if width > 0 else []
     if not vals:
@@ -117,45 +75,6 @@ def level_style(pct: float) -> str:
 # --------------------------------------------------------------------------
 # Curses plumbing
 # --------------------------------------------------------------------------
-
-class Theme:
-    def __init__(self):
-        self.map = {"bold": curses.A_BOLD, "dim": curses.A_DIM, "reverse": curses.A_REVERSE}
-        if curses.has_colors():
-            curses.start_color()
-            try:
-                curses.use_default_colors()
-                bg = -1
-            except curses.error:
-                bg = curses.COLOR_BLACK
-            for i, (n, fg) in enumerate([("red", curses.COLOR_RED), ("green", curses.COLOR_GREEN),
-                                         ("yellow", curses.COLOR_YELLOW), ("blue", curses.COLOR_BLUE),
-                                         ("magenta", curses.COLOR_MAGENTA), ("cyan", curses.COLOR_CYAN)], 1):
-                curses.init_pair(i, fg, bg)
-                self.map[n] = curses.color_pair(i)
-            curses.init_pair(7, curses.COLOR_BLACK, curses.COLOR_CYAN)
-            self.map["bar"] = curses.color_pair(7)
-        else:
-            self.map["bar"] = curses.A_REVERSE
-
-    def __call__(self, *names) -> int:
-        a = 0
-        for n in names:
-            a |= self.map.get(n, 0)
-        return a
-
-
-def put(win, y, x, text, attr=0, width=None) -> None:
-    h, w = win.getmaxyx()
-    if y < 0 or y >= h or x < 0 or x >= w:
-        return
-    avail = w - x if width is None else min(width, w - x)
-    text = trunc(text, avail)
-    try:
-        win.addstr(y, x, text, attr)
-    except curses.error:
-        pass
-
 
 class Line(list):
     """A display line: list of (text, style-name-tuple) segments."""
@@ -708,7 +627,6 @@ class App:
         self.last = 0.0
         self.help = False
         self.disk_sel = 0
-        self.disk_marks: list[int] = []
         self.alerts = AlertEngine()
         self.alerts.bell = False
         self.alert_sel = 0

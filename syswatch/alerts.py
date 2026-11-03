@@ -16,7 +16,7 @@ import json
 import os
 import time
 import tomllib
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 
 LEVELS = {"crit": 2, "warn": 1, "info": 0}
 GB = 1024 ** 3

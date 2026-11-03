@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]  # kali-utils root
 sys.path[:0] = [str(ROOT), str(ROOT / "tests" / "trctl")]  # trctl's fake daemon
@@ -15,9 +16,9 @@ sys.path[:0] = [str(ROOT), str(ROOT / "tests" / "trctl")]  # trctl's fake daemon
 from plexsort import engine, naming  # noqa: E402
 from plexsort.db import DB  # noqa: E402
 from plexsort.music import parse_album_dir  # noqa: E402
-from plexsort.parse import Plan, build_items  # noqa: E402
-from plexsort.providers import (Match, Matcher, Wikidata, apply_match, query_variants, score_match,  # noqa: E402
-                                score_music)
+from plexsort.parse import Plan, build_items, main_artist  # noqa: E402
+from plexsort.providers import (Http, Match, Matcher, Track, Wikidata, apply_match, match_tracks,  # noqa: E402
+                                query_variants, score_match, score_music)
 from plexsort.tags import read_tags  # noqa: E402
 
 
@@ -187,6 +188,119 @@ class TestMusicMatching(unittest.TestCase):
                                  artist="Radiohead"))
         self.assertTrue(all(i.verified == "MusicBrainz" and i.ids["mbid"] == "mbid-1" for i in items))
         self.assertEqual(naming.destination(items[0], CFG), "/lib/Music/Radiohead/OK Computer (1997)/01 - airbag.flac")
+
+
+class TestTrackPairing(unittest.TestCase):
+    """Real cases from the Daft Punk sort: versions must not collapse onto one release track."""
+
+    def tracks(self, names):
+        items, _, _ = build_items("Daft Punk - One More Time", [(n, 1) for n in names],
+                                  lambda rel: {"albumartist": "Daft Punk", "album": "One More Time"})
+        return sorted(items, key=lambda i: i.track)
+
+    def test_versions_stay_separate_and_never_collide(self):
+        items = self.tracks(["01 One More Time (Short Radio Edit).m4a", "02 One More Time (Radio Edit).m4a",
+                             "03 One More Time (Club Mix).m4a"])
+        release = [Track(1, 1, "One More Time", "Daft Punk")]
+        pairs = match_tracks(items, release)
+        self.assertEqual(len(pairs), 1)
+        self.assertIs(pairs[id(items[0])], release[0])
+        apply_match(items, Match("MusicBrainz", "x", "music", "One More Time", 2000, {"mbid": "x"}, artist="Daft Punk"),
+                    StubMatcher(release))
+        self.assertEqual(len({naming.destination(i, CFG) for i in items}), 3)
+        self.assertEqual([i.ep_found for i in items], [True, False, False])
+        self.assertEqual(items[2].track_title, "One More Time (Club Mix)")
+
+    def test_exact_title_beats_position_and_spelling_is_fixed(self):
+        items = self.tracks(["01 Da Funk.flac", "02 Musique.flac", "03 Exit Music (For a Film).flac"])
+        release = [Track(1, 1, "Musique", "A"), Track(1, 2, "Da Funk", "A"), Track(1, 3, "Exit Music (for a Film)", "A")]
+        pairs = match_tracks(items, release)
+        self.assertEqual([pairs[id(i)].title for i in items], ["Da Funk", "Musique", "Exit Music (for a Film)"])
+
+    def test_position_needs_compatible_titles(self):
+        items = self.tracks(["01 Completely Different Song.flac", "02 Song (Live).flac"])
+        release = [Track(1, 1, "Airbag", "A"), Track(1, 2, "Song (Radio Edit)", "A")]
+        self.assertEqual(match_tracks(items, release), {})
+
+    def test_feature_notes_are_not_a_version(self):
+        items = self.tracks(["01 Get Lucky (ft. Pharrell Williams).m4a"])
+        release = [Track(1, 1, "Get Lucky", "Daft Punk feat. Pharrell Williams")]
+        self.assertEqual(len(match_tracks(items, release)), 1)
+
+
+class StubMatcher:
+    def __init__(self, tracks, album_artist="Daft Punk"):
+        self.errors = []
+        result = (tracks, 2000, album_artist)
+
+        class MB:
+            def tracklist(self, mbid):
+                return result
+        self.musicbrainz = MB()
+
+
+class TestMainArtist(unittest.TestCase):
+    def test_featured_artists_keep_one_folder(self):
+        self.assertEqual(main_artist("Daft Punk feat. Pharrell Williams"), "Daft Punk")
+        self.assertEqual(main_artist("Daft Punk starring Julian Casablancas"), "Daft Punk")
+        self.assertEqual(main_artist("Simon & Garfunkel"), "Simon & Garfunkel")
+        items, _, _ = build_items("Get Lucky", [("01 Get Lucky.m4a", 1)], lambda r: {
+            "albumartist": "Daft Punk feat. Pharrell Williams", "artist": "Daft Punk feat. Pharrell Williams",
+            "album": "Get Lucky", "title": "Get Lucky", "tracknumber": "1", "date": "2013"})
+        self.assertEqual(naming.destination(items[0], CFG), "/lib/Music/Daft Punk/Get Lucky (2013)/01 - Get Lucky.m4a")
+
+    def test_feature_guests_are_not_a_compilation(self):
+        tags = {"01 a.mp3": {"artist": "Daft Punk", "album": "RAM", "title": "A", "tracknumber": "1"},
+                "02 b.mp3": {"artist": "Daft Punk feat. Pharrell", "album": "RAM", "title": "B", "tracknumber": "2"}}
+        items, _, _ = build_items("RAM", list((n, 1) for n in tags), lambda r: tags[r])
+        self.assertEqual({i.artist for i in items}, {"Daft Punk"})
+
+    def test_match_uses_main_artist_for_the_folder(self):
+        items, _, _ = build_items("Get Lucky", [("01 Get Lucky.m4a", 1)])
+        release = [Track(1, 1, "Get Lucky", "Daft Punk feat. Pharrell Williams")]
+        apply_match(items, Match("MusicBrainz", "x", "music", "Get Lucky", 2013, {"mbid": "x"},
+                                 artist="Daft Punk feat. Pharrell Williams", album_artist="Daft Punk"),
+                    StubMatcher(release))
+        self.assertEqual(naming.destination(items[0], CFG), "/lib/Music/Daft Punk/Get Lucky (2000)/01 - Get Lucky.m4a")
+
+
+class TestAlbumSearch(unittest.TestCase):
+    def test_artist_is_kept_until_every_spelling_failed(self):
+        queries = []
+
+        def fake_search(album, artist=None):
+            queries.append((album, artist))
+            if artist is None:
+                return [Match("MusicBrainz", "stranger", "music", "One More Time - Single", 2024, {}, artist="The Rebel Nerds")]
+            if album == "One More Time":
+                return [Match("MusicBrainz", "right", "music", "One More Time", 2000, {}, artist="Daft Punk")]
+            return []
+        m = Matcher({"database": os.path.join(tempfile.gettempdir(), "unused.db"), "tmdb_api_key": ""}, http=FakeHttp())
+        m.sources = lambda category, anime: [("MusicBrainz", fake_search)]
+        results = m.search("One More Time - Single", "music", 2000, artist="Daft Punk", tracks=1)
+        self.assertEqual(results[0].pid, "right")
+        self.assertTrue(all(who == "Daft Punk" for _, who in queries))
+
+    def test_retries_when_overloaded(self):
+        import io
+        import urllib.error
+        calls = []
+
+        class Resp(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        def fake_open(req, timeout=None):
+            calls.append(req.full_url)
+            if len(calls) == 1:
+                raise urllib.error.HTTPError(req.full_url, 503, "busy", {"Retry-After": "0"}, None)
+            return Resp(b'{"ok": true}')
+        with mock.patch("urllib.request.urlopen", fake_open), mock.patch("time.sleep"):
+            self.assertEqual(Http(None).request("https://example.test/x", ttl=0), {"ok": True})
+        self.assertEqual(len(calls), 2)
 
 
 class FakeHttp:

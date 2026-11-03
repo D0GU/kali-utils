@@ -16,4 +16,4 @@ plexsort = "plexsort.cli:main"
 syswatch = "syswatch.cli:main"
 
 [tool.setuptools]
-packages = ["trctl", "plexsort", "syswatch"]
+packages = ["kutil", "trctl", "plexsort", "syswatch"]

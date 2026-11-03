@@ -178,5 +178,5 @@ def place(plan: Plan, cfg: dict) -> list[Placement]:
 
 
 def _gb(n: int) -> str:
-    from trctl import fmt
+    from kutil import fmt
     return fmt.human_size(max(0, n))
