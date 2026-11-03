@@ -13,6 +13,8 @@ import string
 from collections import Counter
 from dataclasses import dataclass, field
 
+from kutil.text import normalize
+
 VIDEO_EXT = {".mkv", ".mp4", ".m4v", ".avi", ".mov", ".wmv", ".mpg", ".mpeg", ".ts", ".m2ts",
              ".webm", ".flv", ".ogm", ".divx", ".vob"}
 SUB_EXT = {".srt", ".ass", ".ssa", ".sub", ".idx", ".vtt", ".sup", ".smi"}
@@ -195,14 +197,6 @@ def item_sort_key(it: Item):
 # --------------------------------------------------------------------------
 # Name helpers
 # --------------------------------------------------------------------------
-
-def normalize(s: str) -> str:
-    s = s.lower().replace("&", " and ")
-    s = re.sub(r"[\'’`]", "", s)
-    s = re.sub(r"[^\w]+", " ", s)
-    s = re.sub(r"^(the|a|an) ", "", s.strip())
-    return re.sub(r"\s+", " ", s).strip()
-
 
 def strip_numbering(name: str) -> str:
     """'01. Series' -> 'Series'; '03 - Extras' -> 'Extras'."""

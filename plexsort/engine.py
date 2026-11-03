@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import errno
 import os
 import re
 import shutil
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+
+from kutil.fsops import MoveRefused, move_file, permission_hint, remove_empty_dirs
 
 from . import naming, space
 from .db import DB
@@ -19,15 +20,7 @@ TORRENT_FIELDS = ["id", "name", "hashString", "downloadDir", "percentDone", "lef
                   "doneDate", "status", "magnetLink", "metadataPercentComplete", "error", "errorString", "labels"]
 
 
-class SortError(Exception):
-    pass
-
-
-def permission_hint(e: OSError) -> str:
-    if e.errno in (errno.EACCES, errno.EPERM):
-        return (f"{e.strerror}: {e.filename} - your user needs write access to the torrent folders. "
-                "If 'kali' was just added to the debian-transmission group, log out and back in.")
-    return f"{e.strerror}: {e.filename}"
+SortError = MoveRefused
 
 
 # --------------------------------------------------------------------------
@@ -242,29 +235,6 @@ def check_plan(plan: Plan, cfg: dict, db: DB | None = None) -> Check:
 # --------------------------------------------------------------------------
 # Applying
 # --------------------------------------------------------------------------
-
-def move_file(src: str, dst: str) -> None:
-    if os.path.lexists(dst):
-        raise SortError(f"refusing to overwrite {dst}")
-    os.makedirs(os.path.dirname(dst), exist_ok=True)
-    try:
-        os.rename(src, dst)
-    except OSError as e:
-        if e.errno != errno.EXDEV:
-            raise
-        shutil.move(src, dst)  # different filesystem: copy + delete
-
-
-def remove_empty_dirs(path: str, stop: str) -> None:
-    """rmdir `path` and its parents while empty, never going above `stop`."""
-    path, stop = os.path.abspath(path), os.path.abspath(stop)
-    while path.startswith(stop) and path != stop:
-        try:
-            os.rmdir(path)
-        except OSError:
-            return
-        path = os.path.dirname(path)
-
 
 @dataclass
 class Result:
