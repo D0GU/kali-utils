@@ -127,8 +127,15 @@ def print_plan(plan: engine.Plan, cfg: dict, args=None) -> None:
     print()
     if engine.other_media(plan):
         print(paint(f"Holds {len(engine.other_media(plan))} other file(s): those stay where they are.", "yellow"))
-    if delete:
-        print(paint(f"Deletes {len(delete)} other file(s): ", "yellow") + paint(", ".join(delete[:6]) + (" …" if len(delete) > 6 else ""), "dim"))
+    skipped = {f for b in plan.books if b.skip for f in b.files}
+    for b in engine.kept_duplicates(plan):
+        print(paint(f"Keeps {', '.join(b.files)} in the source: not imported, and the library lacks that format.", "yellow"))
+    delete_books = [f for f in delete if f in skipped]
+    delete_others = [f for f in delete if f not in skipped]
+    if delete_books:
+        print(paint(f"Deletes {len(delete_books)} skipped book file(s): ", "yellow") + paint(", ".join(delete_books[:6]) + (" …" if len(delete_books) > 6 else ""), "dim"))
+    if delete_others:
+        print(paint(f"Deletes {len(delete_others)} other file(s): ", "yellow") + paint(", ".join(delete_others[:6]) + (" …" if len(delete_others) > 6 else ""), "dim"))
     elif plan.leftovers:
         print(paint(f"Leaves {len(plan.leftovers)} other file(s) in place.", "dim"))
     if plan.torrent:
@@ -624,7 +631,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("-y", "--yes", action="store_true", help="don't ask for confirmation")
     g = sp.add_mutually_exclusive_group()
     g.add_argument("--keep-torrent", action="store_true", help="don't remove the torrent from Transmission")
-    g.add_argument("--remove-torrent", action="store_true", help="remove it even if it holds videos or music")
+    g.add_argument("--remove-torrent", action="store_true", help="remove it even if it holds other files")
     sp.add_argument("--keep-leftovers", action="store_true", help="don't delete other files in the source")
     sp = add("books", cmd_books, "List books in the Books folder")
     sp.add_argument("-q", "--search", help="words in the title, author or series")

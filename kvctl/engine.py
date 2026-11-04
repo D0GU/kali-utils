@@ -195,6 +195,7 @@ class Book:
     verified: str = ""
     cover_id: int | None = None
     duplicate_of: int | None = None
+    new_formats: list[str] = field(default_factory=list)    # a skipped duplicate's formats the library doesn't have
     sidecars: list[str] = field(default_factory=list)
     series_guess: tuple | None = None       # (series, number) filled in from the title, until someone changes it
     book_id: int | None = None
@@ -218,6 +219,13 @@ class Plan:
 
 def _key(info: BookInfo) -> tuple:
     return normalize(info.title), author_key(info.authors[0]) if info.authors else ""
+
+
+def _owned_formats(library: list[LibBook]) -> dict[tuple, set[str]]:
+    owned: dict[tuple, set[str]] = defaultdict(set)
+    for b in library:
+        owned[_key(b.info)] |= {book_ext(f) for f in b.files}
+    return owned
 
 
 def _stem(rel: str) -> str:
@@ -279,10 +287,12 @@ def make_plan(source: Source, cfg: dict, library: list[LibBook] | None = None) -
     plan = Plan(source.name, source.path, order, leftovers, source.torrent, incomplete, kind=source.kind)
     library = library_books(cfg) if library is None else library
     known = {_key(b.info): b.id for b in library}
+    owned = _owned_formats(library)
     for b in plan.books:
         dup = known.get(_key(b.info))
         if dup is not None:
             b.duplicate_of, b.skip = dup, True   # already in the library: off by default, Space includes it
+            b.new_formats = sorted({book_ext(f) for f in b.files} - owned[_key(b.info)])
     suggest_series(plan, library)
     return plan
 
@@ -340,6 +350,7 @@ def check_plan(plan: Plan, cfg: dict, db: DB, library: list[LibBook] | None = No
     library = library_books(cfg) if library is None else library
     book_id = next_id(cfg, db, library)
     known = {_key(b.info): b.id for b in library}
+    owned = _owned_formats(library)
     plan.series_partners = _series_partners(plan, library)
     plan.global_errors = []
     if plan.incomplete:
@@ -350,10 +361,14 @@ def check_plan(plan: Plan, cfg: dict, db: DB, library: list[LibBook] | None = No
     for b in plan.books:
         b.error = b.warning = ""
         b.duplicate_of = known.get(_key(b.info))     # an edit can make a book a duplicate, or stop it being one
+        b.new_formats = []
         if b.skip:
             b.dest = ""
             if b.duplicate_of is not None:
                 b.warning = f"already in the library (id {b.duplicate_of})"
+                b.new_formats = sorted({book_ext(f) for f in b.files} - owned[_key(b.info)])
+                if b.new_formats:
+                    b.warning += f" in other formats; this {', '.join(x.lstrip('.') for x in b.new_formats)} copy stays in the source"
             continue
         if not b.info.title.strip():
             b.error = "no title"
@@ -405,13 +420,18 @@ def other_media(plan: Plan) -> list[str]:
             if os.path.splitext(rel)[1].lower() not in JUNK_EXT and os.path.basename(rel).lower() not in JUNK_NAMES]
 
 
+def kept_duplicates(plan: Plan) -> list["Book"]:
+    """Skipped duplicates in a format the library doesn't have: not imported, and not deleted either."""
+    return [b for b in plan.books if b.skip and b.new_formats]
+
+
 def will_remove_torrent(plan: Plan, cfg: dict, remove_torrent: bool | None = None) -> bool:
-    """A mixed torrent stays unless explicitly asked for: its videos or music still need sorting."""
+    """A mixed torrent stays unless explicitly asked for: its other files may still be wanted."""
     if not plan.torrent:
         return False
     if remove_torrent is not None:
         return remove_torrent
-    return bool(cfg["remove_torrent"]) and not other_media(plan)
+    return bool(cfg["remove_torrent"]) and not other_media(plan) and not kept_duplicates(plan)
 
 
 def files_to_delete(plan: Plan, cfg: dict, delete_leftovers: bool | None = None) -> list[str]:
@@ -422,6 +442,8 @@ def files_to_delete(plan: Plan, cfg: dict, delete_leftovers: bool | None = None)
         return []
     junk = [rel for rel, _ in plan.leftovers]
     for b in plan.books:
+        if b.new_formats:
+            continue
         junk += b.sidecars + (b.files if b.skip else [])
     return list(dict.fromkeys(junk))
 

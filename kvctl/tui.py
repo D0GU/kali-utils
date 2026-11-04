@@ -47,7 +47,7 @@ REVIEW  (nothing is moved until you press a)
   a                 apply: move books, write metadata, clean up, scan Kavita
   Status column:    ✓ ok   ! warning   ✗ must be fixed   - skipped
   Applying deletes skipped books and other files in the source, after showing them.
-  A folder opened with o, or a torrent that also holds videos or music, keeps its other files.
+  A folder opened with o, or a torrent that also holds other kinds of file, keeps them.
 
 BOOKS  (what is in the Books folder)
   Enter             details                /  search
@@ -245,6 +245,7 @@ class Review:
         others = [r for r in delete if r not in skipped]
         if others:
             lines.append(f"Delete {len(others)} other file(s): " + ", ".join(others[:3]) + (" …" if len(others) > 3 else ""))
+        lines += [f"Keep {', '.join(b.files)} in the source: the library lacks that format" for b in engine.kept_duplicates(plan)]
         if engine.other_media(plan):
             lines.append(f"Keep the torrent and {len(engine.other_media(plan))} other file(s)")
         elif plan.torrent:

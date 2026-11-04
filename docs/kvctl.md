@@ -38,7 +38,7 @@ kvctl undo OP              # reverses it; `kvctl history` lists operations
 
 **Metadata** comes from the book itself (a `metadata.opf` beside it, then the EPUB, FB2 or MOBI data, then the file name). A keyless Open Library check then fills gaps: the year and a cover if the book has none. It never replaces a title or author on its own, but a match you pick with `f` on the review screen may. Self-published books are often missing from Open Library, so "not found online" is only a warning.
 
-**Duplicates** of a book already in the library start skipped; press Space to import a second copy.
+**Duplicates** of a book already in the library start skipped; press Space to import a second copy. A skipped duplicate in a format the library doesn't have is kept in the source, not deleted, and its torrent stays.
 
 **What happens to the source** is shown before you confirm:
 
