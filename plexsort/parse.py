@@ -323,6 +323,25 @@ def _dir_year(dirs: list[str], skip_seasons: bool = False) -> int | None:
     return None
 
 
+# 'B8 - ', 'NC11 - ', 'LE3E1 - ', 'B15-1 - ', 'BUSA - ', with a season first in some files: a short capitalised code, then a name
+CODED_SPECIAL_RE = re.compile(r"(?:S\d{1,2}\s*-\s*)?((?:[A-Z]\d+[A-Z0-9]*|[A-Z]{2,6}\d*[A-Z0-9]*)(?:-\d+)?\s*-\s*\S.*)")
+
+
+def _after_root(tagless: str, root_name: str) -> str:
+    """What follows the torrent's own name at the start of a file name, or "" if it doesn't start that way."""
+    root = despace(strip_tags(root_name))
+    if not root or not tagless.casefold().startswith(root.casefold() + " "):
+        return ""
+    return tagless[len(root):].strip(" -_.")
+
+
+def _extra_of_root(item: Item, name: str, extra_type: str, root_name: str, note: str) -> Item:
+    item.kind, item.extra_type, item.note = "extra", extra_type, note
+    item.extra_name = clean_title(name, cut_marketing=False, recase=False, keep_years=True)[0] or name
+    _assign_show_title(item, "", [], root_name)     # no folders: 'Misc - Extras' or a season's years aren't the show's
+    return item
+
+
 def classify_video(rel: str, size: int, root_name: str, siblings: dict[str, list[str]]) -> Item:
     parts = rel.split("/")
     fname = parts[-1]
@@ -339,7 +358,12 @@ def classify_video(rel: str, size: int, root_name: str, siblings: dict[str, list
         item.kind, item.note = "skip", "sample"
         return item
 
-    # 2. markers from the innermost folder outwards, then the file name itself
+    # 2. a coded special of the show the torrent is named after: 'Show - B8 - Name', 'Show S19 - LE9P - Name'
+    after_root = _after_root(tagless, root_name)
+    if after_root and not SXXEYY_RE.search(tagless) and (m := CODED_SPECIAL_RE.fullmatch(after_root)):
+        return _extra_of_root(item, m.group(1), "other", root_name, "coded special")
+
+    # 3. markers from the innermost folder outwards, then the file name itself
     marker = None
     for d in reversed(dir_names):
         bare = re.sub(r"\(?\s*(19|20)\d\d\s*\)?", "", d).strip(" -_.")
@@ -360,6 +384,9 @@ def classify_video(rel: str, size: int, root_name: str, siblings: dict[str, list
         elif re.search(r"(?i)(?<![a-z])the movie(?![a-z])", tagless):
             marker = ("movie", tagless)
 
+    # only 'Show - Name': in 'Overlord 2 - Name' the number belongs with the show's name
+    if marker and marker[0] == "extra" and after_root and not sxe and tagless[len(tagless) - len(after_root) - 3:].startswith(" - "):
+        return _extra_of_root(item, after_root, marker[1], root_name, "extra (folder/name marker)")
     if marker and marker[0] == "extra":
         item.kind, item.extra_type = "extra", marker[1]
         item.extra_name = clean_title(stem, cut_marketing=False, recase=False, keep_years=True)[0] or stem
@@ -367,7 +394,7 @@ def classify_video(rel: str, size: int, root_name: str, siblings: dict[str, list
         _assign_show_title(item, "", dirs, root_name)
         return item
 
-    # 3. episode numbering
+    # 4. episode numbering
     ep_match = None
     if sxe:
         item.kind = "episode"

@@ -21,8 +21,8 @@ from trctl.rpc import Client  # noqa: E402
 
 from plexsort import engine, naming  # noqa: E402
 from plexsort.db import DB  # noqa: E402
-from plexsort.parse import build_items, clean_title  # noqa: E402
-from plexsort.providers import AnimeMap, Http, Match, apply_match, query_variants, score_match  # noqa: E402
+from plexsort.parse import Plan, build_items, clean_title  # noqa: E402
+from plexsort.providers import AnimeMap, Episode, Http, Match, apply_match, query_variants, score_match  # noqa: E402
 
 PACK = "(CBB) Space Drill Saga - The Complete Series (BD 1080p)(Dual-Audio)(HEVC-x265-10bit)"
 PACK_FILES = [
@@ -365,6 +365,93 @@ class TestTUISmoke(EngineCase):
         self.wait_for("re-added the torrent")
         self.assertTrue(os.path.exists(os.path.join(self.root, "01. Series/01 - Bust Through.mkv")))
         self.keys("q")
+
+
+class TestCodedSpecials(unittest.TestCase):
+    """A fan collection (GameCenter CX): one show, with specials coded B8, NC11, SP1... The names are the torrent's own."""
+
+    ROOT = "GameCenter CX"
+    S = "Seasons/Season {}/GameCenter CX "
+
+    def item(self, rel):
+        return build_items(self.ROOT, [(rel, 1)])[0][0]
+
+    def test_coded_files_are_extras_of_the_show(self):
+        table = {"DVD Bonus Episodes/GameCenter CX - B8 - City Connection [XerdoSpecter].mkv": "B8 - City Connection",
+                 "DVD Bonus Episodes/GameCenter CX - B15-1 - Resident Evil 2 (Part 1) [LocationScouts].mkv": "B15-1 - Resident Evil 2 (Part 1)",
+                 "DVD Bonus Episodes/GameCenter CX - B3SF - Ring Ring Tactics Compilation.avi": "B3SF - Ring Ring Tactics Compilation",
+                 "DVD Bonus Episodes/GameCenter CX - BUSA - GCCX in the USA Bonus Challenge.mkv": "BUSA - GCCX in the USA Bonus Challenge",
+                 "DVD Bonus Episodes/GameCenter CX - RE1 - Legend of the Mystical Ninja (Revenge)   [VR-GCCX].avi": "RE1 - Legend of the Mystical Ninja (Revenge)",
+                 "Nintendo Channel/GameCenter CX NC11 - Excitebike 3D.avi": "NC11 - Excitebike 3D",
+                 "Nintendo Channel/GameCenter CX NC04 - Downtown Special.avi": "NC04 - Downtown Special",
+                 "Nintendo Channel/GameCenter CX NC09 - Super Metroid (Part 2).avi": "NC09 - Super Metroid (Part 2)",
+                 self.S.format("01 (2003-2004)") + "SP1 - Nintendo - Super Mario Brothers 2 (Part 2) [SA-GCCX].avi": "SP1 - Nintendo - Super Mario Brothers 2 (Part 2)",
+                 "Seasons/Season 11 (2009)/GameCenter CX - LE3E1 - Lemmings Live The Last Continue  [SA-GCCX].avi": "LE3E1 - Lemmings Live The Last Continue",
+                 self.S.format("19 (2015-2016)") + "S19 - LE9P - Super Mario Maker Live Challenge.mkv": "LE9P - Super Mario Maker Live Challenge",
+                 "Seasons/Season 20 (2016)/GameCenter CX - YE6E - 15 New Year's Eve 2016 - Kiki Kaikai Revenge.mkv": "YE6E - 15 New Year's Eve 2016 - Kiki Kaikai Revenge",
+                 "Seasons/Season 10 (2008-2009)/GameCenter CX - SP2D - Southernmost Game Travelogue (2008)  [SA-GCCX].avi": "SP2D - Southernmost Game Travelogue"}
+        for rel, name in table.items():
+            with self.subTest(rel):
+                it = self.item(rel)
+                self.assertEqual((it.kind, it.category, it.title, it.extra_name), ("extra", "show", self.ROOT, name))
+
+    def test_extras_in_a_folder_belong_to_the_show_not_the_folder(self):
+        it = self.item("Misc - Extras/GameCenter CX - Genki TV Interview.avi")
+        self.assertEqual((it.kind, it.title, it.extra_name), ("extra", self.ROOT, "Genki TV Interview"))
+
+    def test_regular_episodes_keep_their_numbers(self):
+        it = self.item(self.S.format("07 (2007)") + "S07E09 #53 - Clocktower (challenge).mkv")
+        self.assertEqual((it.kind, it.season, it.episode), ("episode", 7, 9))
+
+    def test_it_only_applies_under_the_torrents_own_name(self):
+        for root, rel, kind in (("Root", "Other Show - B8 - Something.mkv", "movie"), ("Show Pack", "Show Pack - Pilot.mkv", "movie"),
+                                ("Show Pack", "Show Pack - S01E02 - Pilot.mkv", "episode")):
+            with self.subTest(rel):
+                self.assertEqual(build_items(root, [(rel, 1)])[0][0].kind, kind)
+
+    def test_the_collection_is_one_show_and_nothing_shares_e01_after_matching(self):
+        names = [f"Nintendo Channel/GameCenter CX NC{n:02d} - Game {n}.avi" for n in range(1, 8)]
+        names += ["Misc - Extras/GameCenter CX - Genki TV Interview.avi", self.S.format("01 (2003-2004)") + "S01E01 #1 - First.mkv",
+                  self.S.format("01 (2003-2004)") + "S01E02 #2 - Second.mkv", "DVD Bonus Episodes/GameCenter CX - B8 - City Connection.mkv"]
+        plan = Plan(self.ROOT, "/x", *build_items(self.ROOT, [(n, 1) for n in names])[:2])
+        groups = plan.groups()
+        self.assertEqual([(g.title, len(g.items)) for g in groups], [(self.ROOT, 11)])
+        apply_match(groups[0].items, Match("TVDB", "1", "show", self.ROOT, 2003), None)
+        numbered = [(i.season, i.episode) for i in plan.items if i.kind == "episode"]
+        self.assertEqual(sorted(numbered), [(1, 1), (1, 2)])
+
+
+class TestMatchingAShow(unittest.TestCase):
+    SHOW = Match("TVDB", "1", "show", "Some Show", 2003)
+
+    def test_a_movie_named_show_plus_more_becomes_an_extra_not_episode_one(self):
+        it = build_items("Pack", [("Some Show Holiday Bash.mkv", 1)])[0][0]
+        it.kind, it.title = "movie", "Some Show Holiday Bash"
+        apply_match([it], self.SHOW, None)
+        self.assertEqual((it.kind, it.extra_name, it.season, it.episode), ("extra", "Some Show Holiday Bash", None, None))
+
+    def test_a_movie_named_as_the_show_is_still_an_episode(self):
+        it = build_items("Pack", [("Some Show.mkv", 1)])[0][0]
+        it.kind, it.title = "movie", "Some Show"
+        apply_match([it], self.SHOW, None)
+        self.assertEqual((it.kind, it.season, it.episode), ("episode", 1, 1))
+
+    def test_a_movie_under_another_title_is_still_an_episode(self):
+        it = build_items("Pack", [("Fighting Spirit.mkv", 1)])[0][0]
+        it.kind, it.title = "movie", "Fighting Spirit"
+        apply_match([it], self.SHOW, None)
+        self.assertEqual((it.kind, it.season, it.episode), ("episode", 1, 1))
+
+    def test_alternate_cuts_of_one_number_keep_their_own_titles(self):
+        rels = ["S07E09 #53 - Segments.avi", "S07E09 #53 - Clocktower (challenge).mkv", "S07E10 #54 - Lone.mkv"]
+        items = build_items("Pack", [(f"Some Show {r}", 1) for r in rels])[0]
+
+        class Listing:
+            def episodes(self, match):
+                return [Episode(7, 9, "Online Nine"), Episode(7, 10, "Online Ten")]
+        apply_match(items, self.SHOW, Listing())
+        titles = sorted(i.ep_title for i in items)
+        self.assertEqual(titles, ["#53 - Clocktower (challenge)", "#53 - Segments", "Online Ten"])
 
 
 class TestYearsInNames(unittest.TestCase):

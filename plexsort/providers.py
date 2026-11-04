@@ -22,6 +22,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -804,6 +805,7 @@ def apply_match(items: list[Item], match: Match, matcher: Matcher | None = None)
     if match.category == "music":
         return apply_music_match(items, match, matcher)
     for it in items:
+        own_title = it.title
         it.title = match.title
         it.year = match.year
         it.ids = {k: v for k, v in match.ids.items()}
@@ -813,7 +815,14 @@ def apply_match(items: list[Item], match: Match, matcher: Matcher | None = None)
             it.kind = "movie"
             it.season = it.episode = it.episode_end = None
         elif match.category == "show" and it.kind == "movie":
-            it.kind, it.season, it.episode, it.absolute = "episode", 1, it.part or 1, True
+            if normalize(own_title).startswith(normalize(match.title) + " "):
+                # The show's name and then more is something of the show, not its first episode. Each such file is its
+                # own group, so numbering them here would put them all on E01.
+                it.kind, it.extra_type = "extra", "other"
+                it.extra_name = own_title + (f" (Part {it.part})" if it.part else "")
+                it.part = None
+            else:
+                it.kind, it.season, it.episode, it.absolute = "episode", 1, it.part or 1, True
         it.category = match.category
     if match.category != "show" or matcher is None:
         return
@@ -834,10 +843,13 @@ def apply_match(items: list[Item], match: Match, matcher: Matcher | None = None)
             it.season, it.episode = e.season, e.number
             if it.episode_end:
                 it.episode_end = None
+    numbered = [it for it in items if it.kind == "episode" and it.season != 0 and it.episode is not None]
+    uses = Counter((it.season or 1, it.episode) for it in numbered)
+    for it in numbered:
         e = by_num.get((it.season or 1, it.episode))
         if e:
             it.ep_found = True
-            if e.title:
+            if e.title and uses[(it.season or 1, it.episode)] == 1:   # several cuts of an episode keep the names telling them apart
                 it.ep_title = e.title
         else:
             it.ep_found = False
