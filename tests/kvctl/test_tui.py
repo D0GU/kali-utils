@@ -228,7 +228,7 @@ class TestUI(unittest.TestCase):
         self.wait_for("1 of 1 book(s) to import")
         self.keys("a")
         screen = self.wait_for("Import 1 book(s) into")
-        self.assertIn("Keep the torrent and 1 video/music file(s)", screen)
+        self.assertIn("Keep the torrent and 1 other file(s)", screen)
         self.assertNotIn("Delete", screen)
 
 

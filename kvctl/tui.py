@@ -246,7 +246,7 @@ class Review:
         if others:
             lines.append(f"Delete {len(others)} other file(s): " + ", ".join(others[:3]) + (" …" if len(others) > 3 else ""))
         if engine.other_media(plan):
-            lines.append(f"Keep the torrent and {len(engine.other_media(plan))} video/music file(s)")
+            lines.append(f"Keep the torrent and {len(engine.other_media(plan))} other file(s)")
         elif plan.torrent:
             lines.append("Remove the torrent from Transmission" if engine.will_remove_torrent(plan, cfg) else "Keep the torrent, stopped")
         options = [("a", "Import", "green")]

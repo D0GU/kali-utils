@@ -22,7 +22,10 @@ from .providers import BookMatch, Lookup
 
 TORRENT_FIELDS = ["id", "name", "hashString", "downloadDir", "percentDone", "leftUntilDone", "sizeWhenDone",
                   "doneDate", "status", "magnetLink", "metadataPercentComplete"]
-OTHER_MEDIA = {".mkv", ".mp4", ".avi", ".m4v", ".mov", ".flac", ".mp3", ".m4a", ".ogg", ".opus", ".wav"}
+# The only leftovers an import may delete. Anything else could be something you want, so its source is left alone.
+JUNK_EXT = {".nfo", ".txt", ".url", ".lnk", ".html", ".htm", ".sfv", ".md5", ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp",
+            ".torrent", ".opf", ".db", ".ini"}
+JUNK_NAMES = {".ds_store"}
 GB = 1024 ** 3
 
 
@@ -397,8 +400,9 @@ def plan_ok(plan: Plan) -> bool:
 
 
 def other_media(plan: Plan) -> list[str]:
-    """Videos or music in the source: never delete those or drop the torrent without being told to."""
-    return [rel for rel, _ in plan.leftovers if os.path.splitext(rel)[1].lower() in OTHER_MEDIA]
+    """Files in the source that aren't books or known junk: never delete those or drop the torrent without being told to."""
+    return [rel for rel, _ in plan.leftovers
+            if os.path.splitext(rel)[1].lower() not in JUNK_EXT and os.path.basename(rel).lower() not in JUNK_NAMES]
 
 
 def will_remove_torrent(plan: Plan, cfg: dict, remove_torrent: bool | None = None) -> bool:
@@ -531,7 +535,7 @@ def apply_plan(plan: Plan, cfg: dict, db: DB, transmission=None, kavita=None, lo
         except Exception as e:
             res.errors.append(f"could not remove torrent: {e}")
     elif torrent and transmission is not None and other_media(plan):
-        log("Torrent kept, stopped: it still holds videos or music")
+        log("Torrent kept, stopped: it still holds other files")
     if not single:
         for rel in junk:
             p = os.path.join(base, rel)

@@ -126,7 +126,7 @@ def print_plan(plan: engine.Plan, cfg: dict, args=None) -> None:
     remove = engine.will_remove_torrent(plan, cfg, False if keep_torrent else (True if getattr(args, "remove_torrent", False) else None))
     print()
     if engine.other_media(plan):
-        print(paint(f"Holds {len(engine.other_media(plan))} video/music file(s): those stay where they are.", "yellow"))
+        print(paint(f"Holds {len(engine.other_media(plan))} other file(s): those stay where they are.", "yellow"))
     if delete:
         print(paint(f"Deletes {len(delete)} other file(s): ", "yellow") + paint(", ".join(delete[:6]) + (" …" if len(delete) > 6 else ""), "dim"))
     elif plan.leftovers:

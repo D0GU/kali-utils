@@ -45,7 +45,7 @@ kvctl undo OP              # reverses it; `kvctl history` lists operations
 | Source | Other files and skipped books | Torrent |
 |---|---|---|
 | Torrent or watched folder | deleted | removed from Transmission (the moved books stay) |
-| Torrent that also holds videos or music | all kept, for plexsort to sort | kept, stopped |
+| Torrent that also holds anything else (videos, audiobooks, archives, unknown files) | all kept | kept, stopped |
 | Path you named (`o` in the UI, or a path argument) | all kept; only the books move | - |
 
 `--keep-torrent`, `--keep-leftovers` and `--remove-torrent` override this. Files an import deleted can't be restored by undo. Settings `remove_torrent` and `delete_leftovers` change the defaults.
