@@ -17,11 +17,9 @@ import shutil
 import xml.etree.ElementTree as ET
 import zipfile
 
-from .metadata import MAX_XML, ZIP_ERRORS
+from .metadata import AUTHOR_ROLES, MAX_XML, ZIP_ERRORS
 
 MAX_TOTAL = 4 * 1024 ** 3   # uncompressed; anything bigger isn't a book we should unpack on a guess
-# Kavita's list of roles that mean "wrote it"
-AUTHOR_ROLES = {"", "aut", "author", "creator", "cre"}
 _CREATOR = re.compile(r"<((?:[\w.-]+:)?creator)\b([^>]*?)(/?)>(?:(.*?)</\1\s*>)?", re.S)
 # Self-closed and paired. Group 2 is the attributes, group 3 the text (None if self-closed). A self-closed tag must not
 # run on to the next closing tag, which would hide the element after it.

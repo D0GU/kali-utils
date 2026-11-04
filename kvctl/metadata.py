@@ -17,6 +17,7 @@ from .calibre import BookInfo
 BOOK_EXT = {".epub", ".kepub", ".mobi", ".azw", ".azw3", ".fb2", ".pdf", ".lit", ".djvu", ".txt.zip", ".fb2.zip"}
 PRIMARY_EXT = BOOK_EXT - {".txt.zip"}
 MAX_XML = 4 * 1024 * 1024
+AUTHOR_ROLES = {"", "aut", "author", "creator", "cre"}      # Kavita's list of roles that mean "wrote it"
 # How a damaged zip can fail while being read, beyond what zipfile wraps in BadZipFile.
 ZIP_ERRORS = (zipfile.BadZipFile, zlib.error, lzma.LZMAError, EOFError, RuntimeError, NotImplementedError, UnicodeDecodeError)
 MAX_COVER = 30 * 1024 * 1024
@@ -61,12 +62,15 @@ def read_epub(path: str) -> tuple[BookInfo, bytes | None, str]:
         if meta is None:
             return info, None, ""
         cover_id = ""
+        # EPUB 3 gives a creator's role in a separate element pointing at its id
+        roles = {(e.get("refines") or "").lstrip("#"): _clean(e.text) for e in meta.iter()
+                 if _local(e.tag) == "meta" and e.get("property") == "role"}
         for e in meta.iter():
             tag, text = _local(e.tag), _clean(e.text)
             attrs = {k.rsplit("}", 1)[-1].lower(): v for k, v in e.attrib.items()}
             if tag == "title" and not info.title:
                 info.title = text
-            elif tag == "creator" and text and attrs.get("role", "aut") in ("aut", ""):
+            elif tag == "creator" and text and (roles.get(attrs.get("id", "")) or attrs.get("role", "aut")).lower() in AUTHOR_ROLES:
                 info.authors.append(text)
             elif tag == "language" and not info.language:
                 info.language = text
