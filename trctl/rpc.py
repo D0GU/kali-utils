@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import http.client
 import json
 import socket
 import urllib.error
@@ -65,6 +66,8 @@ class Client:
                 raise RPCError(f"timed out talking to {self.url}") from None
             except json.JSONDecodeError:
                 raise RPCError(f"{self.url} did not return JSON - is this a Transmission RPC URL?") from None
+            except (http.client.HTTPException, OSError, ValueError) as e:     # dropped or cut off mid-reply, or not text
+                raise RPCError(f"lost the connection to {self.url}: {e or type(e).__name__}") from None
         else:
             raise RPCError("daemon kept rejecting the session id (HTTP 409)")
 

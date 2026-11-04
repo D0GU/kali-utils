@@ -445,6 +445,8 @@ class App(Screen):
         self.body_y = top + 1
         if d is None:
             put(self.scr, top, 2, "Loading…", th("dim"))
+        elif d.get("_gone"):    # removed elsewhere while open; the next key goes back to the list
+            put(self.scr, top, 2, "This torrent no longer exists. Press any key to go back.", th("yellow"))
         elif self.tab == 0:
             self.draw_info(d, top, body_h, w)
         elif self.tab == 1:
@@ -635,6 +637,10 @@ class App(Screen):
             if row >= 0:
                 state.index = state.top + row
                 if self.view == "list" and bstate & curses.BUTTON1_DOUBLE_CLICKED:
+                    items = self.visible()
+                    if items:   # open_detail follows selected_id, so it must name the row clicked
+                        self.list.index = min(self.list.index, len(items) - 1)
+                        self.selected_id = items[self.list.index]["id"]
                     self.open_detail(0)
         state.index = max(0, state.index)
         if self.view == "list":

@@ -127,3 +127,5 @@ Paths for `add -d` and `mv` are on the daemon's machine. On this server, AppArmo
 The tests run every command end-to-end against `tests/trctl/fake_daemon.py`. This in-process fake RPC server implements the 409 session handshake, basic auth, and the RPC methods trctl uses, so the tests never touch a real daemon. The UI test drives the real curses interface inside a detached tmux session and is skipped if tmux isn't installed.
 
 Layout: `trctl/rpc.py` (RPC client), `trctl/config.py` (settings), `trctl/cli.py` (commands), `trctl/tui.py` (interactive UI), `bin/trctl` (launcher).
+
+Saved credentials only go to the saved server. With `--url` or `TRCTL_URL` pointing elsewhere, give `--user` and `TRCTL_PASSWORD` or the password prompt.

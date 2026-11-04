@@ -81,14 +81,17 @@ def load_settings(cli_url: str | None = None, cli_user: str | None = None) -> Se
     s = Settings()
 
     s.url = normalize_url(cli_url or env.get("TRCTL_URL") or file.get("url") or DEFAULT_URL)
-    s.username = cli_user or env.get("TRCTL_USERNAME") or file.get("username") or None
+    # Saved credentials belong to the saved server: a one-off --url must not send them somewhere else.
+    same_server = s.url == normalize_url(file.get("url") or DEFAULT_URL)
+    s.username = cli_user or env.get("TRCTL_USERNAME") or (file.get("username") if same_server else None) or None
+    saved_applies = same_server and s.username == (file.get("username") or None)
     s.timeout = float(file.get("timeout", s.timeout))
 
     if "TRCTL_PASSWORD" in env:
         s.password = env["TRCTL_PASSWORD"]
-    elif file.get("password") is not None and (not cli_user or cli_user == file.get("username")):
+    elif file.get("password") is not None and saved_applies:
         s.password = str(file["password"])
-    elif file.get("password_command") and (not cli_user or cli_user == file.get("username")):
+    elif file.get("password_command") and saved_applies:
         s.password = run_password_command(file["password_command"])
 
     if s.username and s.password is None and sys.stdin.isatty():

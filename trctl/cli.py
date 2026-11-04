@@ -599,6 +599,8 @@ def parse_file_spec(spec: str, paths: list[str]) -> list[int]:
             if not hits:
                 raise CLIError(f"no file matches {part!r}")
             result.update(hits)
+    if not result:      # Transmission reads an empty list as every file
+        raise CLIError("no files were named")
     return sorted(result)
 
 
