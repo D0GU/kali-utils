@@ -196,6 +196,7 @@ class Book:
     verified: str = ""
     cover_id: int | None = None
     duplicate_of: int | None = None
+    series_as_read: str = ""    # so clearing it in the review can be told apart from the book's data never having one
     new_formats: list[str] = field(default_factory=list)    # a skipped duplicate's formats the library doesn't have
     sidecars: list[str] = field(default_factory=list)
     series_guess: tuple | None = None       # (series, number) filled in from the title, until someone changes it
@@ -294,6 +295,8 @@ def make_plan(source: Source, cfg: dict, library: list[LibBook] | None = None) -
         if dup is not None:
             b.duplicate_of, b.skip = dup, True   # already in the library: off by default, Space includes it
             b.new_formats = sorted({book_ext(f) for f in b.files} - owned[_key(b.info)])
+    for b in plan.books:
+        b.series_as_read = b.info.series
     suggest_series(plan, library)
     return plan
 
@@ -532,7 +535,7 @@ def apply_plan(plan: Plan, cfg: dict, db: DB, transmission=None, kavita=None, lo
                 move_file(src, dst)
                 db.record(op, "moved", dst, src, book_id=b.book_id, title=b.info.title)
                 problem = _write_epub(dst, op, db, b.book_id, b.info.title, authors=_import_authors(dst, b.info.authors, people),
-                                      series_name=b.info.series or None, index=b.info.series_index)
+                                      series_name=b.info.series or ("" if b.series_as_read else None), index=b.info.series_index)
                 if problem:
                     res.errors.append(problem)
             if b.cover is None and b.cover_id and lookup is not None:
