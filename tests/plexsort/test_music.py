@@ -356,7 +356,7 @@ class TestMusicSort(unittest.TestCase):
         t = self.tmp.name
         self.cfg = {"movies_dir": f"{t}/media/Movies", "tv_dir": f"{t}/media/TV Shows", "music_dir": f"{t}/media/Music",
                     "database": f"{t}/db/library.db", "tmdb_api_key": "", "id_tags": True, "remove_torrent": True,
-                    "delete_leftovers": True, "online": False, "download_cover_art": False, "inbox_dirs": ""}
+                    "delete_leftovers": True, "holding_dir": f"{t}/holding", "online": False, "download_cover_art": False, "inbox_dirs": ""}
         self.db = DB(self.cfg["database"])
         self.root = os.path.join(t, "incoming", "Radiohead - OK Computer (1997) [FLAC]")
         os.makedirs(self.root)
@@ -396,7 +396,7 @@ class TestMusicSort(unittest.TestCase):
         self.assertEqual(engine.scan_library(self.cfg, self.db), (1, 0))
 
         restored, errors = engine.undo_operation(result.op_id, self.cfg, self.db)
-        self.assertEqual((restored, errors), (4, []))
+        self.assertEqual((restored, errors), (5, []))     # four sorted, plus the cleared info.nfo
         self.assertTrue(os.path.exists(os.path.join(self.root, "02 - Paranoid Android.flac")))
 
 

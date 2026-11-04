@@ -327,7 +327,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("source")
     sp.add_argument("-y", "--yes", action="store_true", help="don't ask for confirmation")
     sp.add_argument("--keep-torrent", action="store_true", help="don't remove the torrent from Transmission")
-    sp.add_argument("--keep-leftovers", action="store_true", help="don't delete leftover junk files")
+    sp.add_argument("--keep-leftovers", action="store_true", help="don't clear leftover junk files to the holding folder")
     sp.add_argument("--allow-unverified", action="store_true", help="sort titles that couldn't be verified online")
     sp = add("library", cmd_library, "List the sorted library", ["lib"])
     g = sp.add_mutually_exclusive_group()

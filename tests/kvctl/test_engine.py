@@ -251,7 +251,7 @@ class TestHoldingFolder(Base):
         ancient = time.time() - 31 * 86400
         for folder in (old, other):
             os.utime(folder, (ancient, ancient))
-        engine.purge_held(self.cfg)
+        engine.purge_held(self.cfg["holding_dir"])
         self.assertEqual(sorted(os.listdir(hold)), ["4", "my-notes"])
 
     def test_importing_clears_expired_operations(self):
@@ -262,7 +262,7 @@ class TestHoldingFolder(Base):
         self.assertFalse(os.path.exists(f"{hold}/3"))
 
     def test_purging_with_no_holding_folder_is_fine(self):
-        engine.purge_held(self.cfg)
+        engine.purge_held(self.cfg["holding_dir"])
 
 
 class TestBooksWithNoId(Base):

@@ -21,7 +21,8 @@ DEFAULTS = {
     "tmdb_api_key": "",
     "id_tags": True,            # add {tvdb-..}/{tmdb-..}/{imdb-..} to folder names so Plex matches exactly
     "remove_torrent": True,     # remove the torrent from Transmission after sorting (data is kept/moved)
-    "delete_leftovers": True,   # delete junk (.txt, .nfo, samples) left behind in the torrent folder
+    "delete_leftovers": True,   # clear junk (.txt, .nfo, samples) from the torrent folder to holding_dir, for 30 days
+    "holding_dir": "/mnt/data/plexsort-holding",
     "online": True,             # look titles up online
     "download_cover_art": True, # fetch album covers from the Cover Art Archive when an album has none
     "min_free_gb": 2,           # always leave at least this much free space on a destination drive
@@ -67,6 +68,7 @@ def load() -> dict:
     for key in LIST_KEYS:
         cfg[key] = _as_list(cfg.get(key))
     cfg["database"] = os.path.expanduser(str(cfg["database"]))
+    cfg["holding_dir"] = os.path.abspath(os.path.expanduser(str(cfg["holding_dir"])))
     return cfg
 
 

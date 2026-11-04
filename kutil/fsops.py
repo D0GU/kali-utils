@@ -5,6 +5,9 @@ from __future__ import annotations
 import errno
 import os
 import shutil
+import time
+
+HOLD_DAYS = 30      # how long cleared files stay in a tool's holding folder
 
 
 class MoveRefused(Exception):
@@ -39,3 +42,19 @@ def remove_empty_dirs(path: str, stop: str) -> None:
         except OSError:
             return
         path = os.path.dirname(path)
+
+
+def purge_held(holding_dir: str) -> None:
+    """Permanently remove operations' folders past their time. Only folders named as the tools name them: <operation id>."""
+    try:
+        names = os.listdir(holding_dir)
+    except OSError:
+        return
+    cutoff = time.time() - HOLD_DAYS * 86400
+    for name in names:
+        path = os.path.join(holding_dir, name)
+        try:
+            if name.isdecimal() and not os.path.islink(path) and os.path.isdir(path) and os.path.getmtime(path) < cutoff:
+                shutil.rmtree(path, ignore_errors=True)
+        except OSError:
+            pass

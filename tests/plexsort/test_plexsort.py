@@ -187,7 +187,8 @@ class EngineCase(unittest.TestCase):
         os.makedirs(self.download_dir)
         self.cfg = {"movies_dir": os.path.join(t, "media", "Movies"), "tv_dir": os.path.join(t, "media", "TV Shows"),
                     "database": os.path.join(t, "db", "library.db"), "tmdb_api_key": "", "id_tags": True,
-                    "remove_torrent": True, "delete_leftovers": True, "online": False, "inbox_dirs": ""}
+                    "remove_torrent": True, "delete_leftovers": True, "holding_dir": os.path.join(t, "holding"),
+                    "online": False, "inbox_dirs": ""}
         self.db = DB(self.cfg["database"])
         self.root = make_tree(self.download_dir, PACK, PACK_FILES)
         self.daemon = FakeDaemon([make_torrent(7, PACK, [(f, 100) for f in PACK_FILES], done=1.0, status=6,
@@ -271,7 +272,7 @@ class TestEngine(EngineCase):
 
         # undo puts the remaining files back and re-adds the torrent
         restored, errors = engine.undo_operation(result.op_id, self.cfg, self.db, self.client, readd_torrent=True)
-        self.assertEqual(restored, 6)
+        self.assertEqual(restored, 8)     # six sorted, plus two cleared leftovers
         self.assertTrue(any("missing" in e for e in errors))
         self.assertTrue(os.path.exists(os.path.join(self.root, "01. Series/03 - Two Faces.en.srt")))
         self.assertEqual(len(self.daemon.torrents), 1)
@@ -282,6 +283,75 @@ class TestEngine(EngineCase):
         self.assertEqual(len(self.daemon.torrents), 1)
         self.assertTrue(os.path.exists(os.path.join(self.root, "Torrent Description (READ Me).txt")))
         self.assertTrue(os.path.exists(os.path.join(self.root, "sample.mkv")))
+
+
+class TestHoldingFolder(EngineCase):
+    """Cleared files move aside for 30 days, and only files known to be junk or skipped are cleared."""
+
+    TXT = "Torrent Description (READ Me).txt"
+
+    def apply(self, **kw):
+        return engine.apply_plan(self.verified_plan(), self.cfg, self.db, self.client, **kw)
+
+    def test_junk_and_samples_move_to_the_holding_folder(self):
+        res = self.apply()
+        hold = os.path.join(self.cfg["holding_dir"], str(res.op_id))
+        self.assertTrue(os.path.exists(os.path.join(hold, self.TXT)))
+        self.assertTrue(os.path.exists(os.path.join(hold, "sample.mkv")))
+        self.assertEqual(res.held, 2)
+        self.assertFalse(os.path.exists(self.root))
+
+    def test_files_that_are_not_known_junk_stay_in_the_source(self):
+        for name in ("Digital Booklet.pdf", "king.ico", "data.xyz"):
+            Path(self.root, name).write_bytes(b"keep me")
+        plan = self.verified_plan()
+        self.assertEqual(sorted(engine.leftovers_kept(plan)), ["Digital Booklet.pdf", "data.xyz", "king.ico"])
+        engine.apply_plan(plan, self.cfg, self.db, self.client)
+        for name in ("Digital Booklet.pdf", "king.ico", "data.xyz"):
+            self.assertEqual(Path(self.root, name).read_bytes(), b"keep me")
+        self.assertFalse(os.path.exists(os.path.join(self.root, self.TXT)))
+
+    def test_undo_puts_them_back(self):
+        res = self.apply()
+        restored, errors = engine.undo_operation(res.op_id, self.cfg, self.db)
+        self.assertEqual(errors, [])
+        self.assertTrue(os.path.exists(os.path.join(self.root, self.TXT)))
+        self.assertTrue(os.path.exists(os.path.join(self.root, "sample.mkv")))
+        self.assertFalse(os.path.exists(os.path.join(self.cfg["holding_dir"], str(res.op_id))))
+
+    def test_undo_after_they_expired_restores_the_rest(self):
+        res = self.apply()
+        shutil.rmtree(os.path.join(self.cfg["holding_dir"], str(res.op_id)))
+        _, errors = engine.undo_operation(res.op_id, self.cfg, self.db)
+        self.assertEqual(errors, [])
+        self.assertIn("no longer held", self.db.operation(res.op_id)["message"])
+        self.assertEqual(self.db.operation(res.op_id)["status"], "undone")
+
+    def test_undoing_twice_does_not_move_them_again(self):
+        res = self.apply()
+        engine.undo_operation(res.op_id, self.cfg, self.db)
+        _, errors = engine.undo_operation(res.op_id, self.cfg, self.db)
+        self.assertEqual(errors, [])
+
+    def test_if_a_file_cannot_be_held_it_stays(self):
+        Path(self.cfg["holding_dir"]).write_bytes(b"a file, so no folder can go here")
+        res = self.apply()
+        self.assertTrue(os.path.exists(os.path.join(self.root, self.TXT)))
+        self.assertTrue(any(self.TXT in e for e in res.errors), res.errors)
+
+    def test_nothing_is_held_when_leftovers_are_kept(self):
+        res = self.apply(delete_leftovers=False)
+        self.assertEqual(res.held, 0)
+        self.assertFalse(os.path.exists(self.cfg["holding_dir"]))
+
+    def test_sorting_clears_expired_folders_and_nothing_else(self):
+        hold = Path(self.cfg["holding_dir"])
+        for name in ("3", "my-notes"):
+            (hold / name).mkdir(parents=True)
+            os.utime(hold / name, (1, 1))
+        self.apply()
+        self.assertFalse((hold / "3").exists())
+        self.assertTrue((hold / "my-notes").exists())
 
 
 @unittest.skipUnless(shutil.which("tmux"), "tmux not installed")

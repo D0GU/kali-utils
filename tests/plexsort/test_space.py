@@ -61,7 +61,7 @@ class PlacementCase(unittest.TestCase):
         self.cfg = {"movies_dirs": [f"{t}/hdd1/Movies", f"{t}/hdd2/Movies"], "tv_dirs": [f"{t}/hdd1/TV", f"{t}/hdd2/TV"],
                     "music_dirs": [f"{t}/hdd1/Music"], "database": f"{t}/ssd/db.sqlite", "id_tags": True,
                     "min_free_gb": 2, "online": False, "download_cover_art": False, "remove_torrent": True,
-                    "delete_leftovers": True, "inbox_dirs": []}
+                    "delete_leftovers": True, "holding_dir": f"{t}/holding", "inbox_dirs": []}
         self.db = DB(self.cfg["database"])
 
     def tearDown(self):

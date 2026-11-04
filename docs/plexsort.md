@@ -4,7 +4,7 @@ Turns completed Transmission torrents into a properly named Plex library: movies
 
 1. moves the files into Plex's folder and file naming,
 2. removes the torrent from Transmission (the data is kept, because it was moved),
-3. deletes the leftover junk (.txt/.nfo/samples), and
+3. moves leftover junk (.txt/.nfo/samples and whatever you skipped) to a holding folder for 30 days, and leaves any other file where it is, and
 4. records everything in a SQLite library database, so any sort can be undone.
 
 Part of [kali-utils](../README.md). It reuses trctl's Transmission connection (`~/.config/trctl/config.toml`) and the shared `kutil` curses widgets.
@@ -105,7 +105,7 @@ plexsort config                  # show settings, folders and their free space
 plexsort config add movies_dirs /mnt/disk2/Movies     # also: tv_dirs, music_dirs, inbox_dirs
 plexsort config remove inbox_dirs /some/folder
 plexsort config set min_free_gb 5  # other keys: database, tmdb_api_key, id_tags, remove_torrent,
-                                   # delete_leftovers, online, download_cover_art
+                                   # delete_leftovers, holding_dir, online, download_cover_art
 ```
 
 `--offline` skips online lookups. `--url/--user` override the Transmission connection.

@@ -8,8 +8,8 @@ import shutil
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
-from kutil.media import VIDEO_EXT
-from kutil.fsops import MoveRefused, move_file, permission_hint, remove_empty_dirs
+from kutil.fsops import HOLD_DAYS, MoveRefused, move_file, permission_hint, purge_held, remove_empty_dirs
+from kutil.media import VIDEO_EXT, is_junk
 
 from . import naming, space
 from .db import DB
@@ -158,6 +158,16 @@ def auto_match(plan: Plan, matcher: Matcher, progress=None) -> list[str]:
     return sorted(set(errors))
 
 
+def files_to_clear(plan: Plan) -> list[str]:
+    """Files a sort moves to the holding folder: known junk, and whatever was skipped."""
+    return [rel for rel, _ in plan.leftovers if is_junk(rel)] + [i.src for i in plan.skipped()]
+
+
+def leftovers_kept(plan: Plan) -> list[str]:
+    """Other files that stay in the source, because nothing says they're junk."""
+    return [rel for rel, _ in plan.leftovers if not is_junk(rel)]
+
+
 @dataclass
 class Check:
     dests: dict = field(default_factory=dict)      # id(item) -> dst
@@ -243,7 +253,7 @@ class Result:
     moved: int = 0
     errors: list = field(default_factory=list)
     torrent_removed: bool = False
-    leftovers_deleted: int = 0
+    held: int = 0       # files moved to the holding folder
 
 
 def apply_plan(plan: Plan, cfg: dict, db: DB, client=None, remove_torrent: bool | None = None,
@@ -332,23 +342,25 @@ def apply_plan(plan: Plan, cfg: dict, db: DB, client=None, remove_torrent: bool 
             result.errors.append(f"could not remove torrent: {e}")
 
     if delete_leftovers and not single_file:
-        junk = [rel for rel, _ in plan.leftovers] + [i.src for i in plan.skipped()]
-        for rel in junk:
+        purge_held(cfg["holding_dir"])
+        for rel in files_to_clear(plan):
             p = os.path.join(base, rel)
             try:
                 if os.path.isfile(p) or os.path.islink(p):
-                    os.remove(p)
-                    result.leftovers_deleted += 1
-            except OSError as e:
-                result.errors.append(f"could not delete {rel}: {e.strerror}")
+                    held = os.path.join(cfg["holding_dir"], str(op_id), rel)
+                    move_file(p, held)
+                    db.record_held(op_id, p, held)
+                    result.held += 1
+            except (OSError, MoveRefused) as e:     # it just stays in the source
+                result.errors.append(f"could not move {rel} to the holding folder: {getattr(e, 'strerror', None) or e}")
         # remove now-empty folders bottom-up, then the torrent folder itself
         for dp, dn, fn in sorted(os.walk(base), key=lambda x: -x[0].count("/")):
             try:
                 os.rmdir(dp)
             except OSError:
                 pass
-        if result.leftovers_deleted:
-            log(f"Deleted {result.leftovers_deleted} leftover file(s)")
+        if result.held:
+            log(f"Moved {result.held} other file(s) to {os.path.join(cfg['holding_dir'], str(op_id))}")
     elif not single_file:
         for dp, dn, fn in sorted(os.walk(base), key=lambda x: -x[0].count("/")):
             try:
@@ -356,8 +368,7 @@ def apply_plan(plan: Plan, cfg: dict, db: DB, client=None, remove_torrent: bool 
             except OSError:
                 pass
 
-    db.finish_operation(op_id, "applied", "; ".join(result.errors), torrent_removed=result.torrent_removed,
-                        leftovers_deleted=bool(result.leftovers_deleted))
+    db.finish_operation(op_id, "applied", "; ".join(result.errors), torrent_removed=result.torrent_removed)
     return result
 
 
@@ -394,8 +405,22 @@ def undo_operation(op_id: int, cfg: dict, db: DB, client=None, readd_torrent: bo
         title = db.title(f["title_id"])
         if title:
             remove_empty_dirs(os.path.dirname(f["dst"]), naming.root_of(f["dst"], title["category"], cfg))
+    expired = 0
+    for h in db.held_files(op_id):
+        try:
+            if os.path.lexists(h["dst"]):
+                move_file(h["dst"], h["src"])
+                remove_empty_dirs(os.path.dirname(h["dst"]), cfg["holding_dir"])
+                restored += 1
+            else:
+                expired += 1
+            db.set_held(h["id"], "undone")
+        except (OSError, SortError, MoveRefused) as e:
+            errors.append(permission_hint(e) if isinstance(e, OSError) else str(e))
     db.prune_titles()
     msg = f"undone: {restored} file(s) restored"
+    if expired:
+        msg += f"; {expired} other file(s) no longer held, past {HOLD_DAYS} days"
     if readd_torrent and op["magnet"] and client is not None:
         try:
             client.torrent_add(filename=op["magnet"], download_dir=op["download_dir"], paused=False)

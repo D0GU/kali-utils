@@ -50,6 +50,8 @@ CREATE INDEX IF NOT EXISTS files_title ON files(title_id);
 CREATE INDEX IF NOT EXISTS files_dst ON files(dst);
 CREATE INDEX IF NOT EXISTS files_op ON files(operation_id);
 CREATE TABLE IF NOT EXISTS cache (key TEXT PRIMARY KEY, value TEXT, fetched REAL);
+CREATE TABLE IF NOT EXISTS held (      -- files an operation cleared to the holding folder
+    id INTEGER PRIMARY KEY, operation_id INTEGER NOT NULL, src TEXT NOT NULL, dst TEXT NOT NULL, status TEXT NOT NULL);
 """
 
 
@@ -105,6 +107,17 @@ class DB:
                    SUM(f.status = 'present') AS present
             FROM operations o LEFT JOIN files f ON f.operation_id = o.id
             GROUP BY o.id ORDER BY o.id DESC""").fetchall()
+
+    def record_held(self, op_id: int, src: str, dst: str) -> None:
+        self.conn.execute("INSERT INTO held(operation_id, src, dst, status) VALUES (?,?,?, 'held')", (op_id, src, dst))
+        self.conn.commit()
+
+    def held_files(self, op_id: int) -> list:
+        return self.conn.execute("SELECT * FROM held WHERE operation_id = ? AND status = 'held' ORDER BY id DESC", (op_id,)).fetchall()
+
+    def set_held(self, held_id: int, status: str) -> None:
+        self.conn.execute("UPDATE held SET status = ? WHERE id = ?", (status, held_id))
+        self.conn.commit()
 
     def operation_files(self, op_id: int) -> list:
         return self.conn.execute("SELECT * FROM files WHERE operation_id = ? ORDER BY id", (op_id,)).fetchall()

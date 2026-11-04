@@ -575,7 +575,7 @@ class App(Screen):
         options.append(("Esc", "Cancel", "dim"))
         lines = [f"Undo sorting “{op['source_name']}” (#{op_id})?", f"Files go back to {op['source_root']}"]
         if op["leftovers_deleted"]:
-            lines.append("Deleted leftover files (txt/nfo/samples) can't be restored.")
+            lines.append("This older sort deleted its leftover files, and those can't be restored.")
         choice = choose(self, "Undo", lines, options, default=len(options) - 1)
         if choice not in ("u", "t"):
             return
@@ -616,8 +616,9 @@ class App(Screen):
             Field("id_tags", "Add {tvdb-…} ids to folders", "bool", c["id_tags"],
                   hint="makes Plex match exactly"),
             Field("remove_torrent", "Remove torrent after sorting", "bool", c["remove_torrent"]),
-            Field("delete_leftovers", "Delete leftover junk", "bool", c["delete_leftovers"],
-                  hint=".txt/.nfo/samples left in the torrent folder"),
+            Field("delete_leftovers", "Clear leftover junk", "bool", c["delete_leftovers"],
+                  hint=".txt/.nfo/samples go to the holding folder for 30 days"),
+            Field("holding_dir", "Holding folder", "path", c["holding_dir"]),
             Field("online", "Look titles up online", "bool", c.get("online", True)),
             Field("download_cover_art", "Download missing album covers", "bool", c.get("download_cover_art", True),
                   hint="from the Cover Art Archive, for albums matched on MusicBrainz"),
@@ -1305,19 +1306,23 @@ class Review:
         shows = sum(1 for g in groups if g.category == "show")
         albums = sum(1 for g in groups if g.category == "music")
         movies = len(groups) - shows - albums
-        junk = len(self.plan.leftovers) + len(self.plan.skipped())
-        junk_size = sum(s for _, s in self.plan.leftovers) + sum(i.size for i in self.plan.skipped())
+        sizes = dict(self.plan.leftovers) | {i.src: i.size for i in self.plan.skipped()}
+        clearing = engine.files_to_clear(self.plan)
+        junk = len(clearing)
+        junk_size = sum(sizes.get(rel, 0) for rel in clearing)
+        kept = engine.leftovers_kept(self.plan)
         skipped_media = [i for i in self.plan.skipped() if i.note != "sample"]
         fields = []
         if self.plan.torrent and app.client:
             fields.append(Field("remove", "Remove torrent from Transmission", "bool", app.cfg["remove_torrent"],
                                 hint="the data is moved, so seeding stops either way"))
         if junk and os.path.isdir(self.plan.root):
-            fields.append(Field("leftovers", f"Delete {junk} leftover file(s) ({fmt.human_size(junk_size)})", "bool",
+            fields.append(Field("leftovers", f"Clear {junk} leftover file(s) ({fmt.human_size(junk_size)})", "bool",
                                 app.cfg["delete_leftovers"] and not skipped_media,
                                 hint=(f"includes skipped {media_counts(skipped_media).upper()} - check before enabling"
                                       if skipped_media
-                                      else ".txt/.nfo/samples etc. left in the torrent folder")))
+                                      else "moved to the holding folder for 30 days; undo restores them"
+                                      + (f"; {len(kept)} other file(s) stay" if kept else ""))))
         intro = []
         by_root: dict[str, list] = {}
         for pl in check.placements:
@@ -1360,7 +1365,7 @@ class Review:
             app.tab = 1
             app.flash(f"Sorted {result.moved} file(s) into the library"
                       + (" · torrent removed" if result.torrent_removed else "")
-                      + (f" · {result.leftovers_deleted} leftover(s) deleted" if result.leftovers_deleted else ""))
+                      + (f" · {result.held} leftover(s) held" if result.held else ""))
 
 
 def run(cfg: dict, db: DB, client, settings=None, start_source: str | None = None, offline: bool = False,

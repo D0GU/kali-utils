@@ -11,7 +11,8 @@ from functools import lru_cache
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
-from kutil.fsops import MoveRefused, move_file, permission_hint, remove_empty_dirs
+from kutil.fsops import HOLD_DAYS, MoveRefused, move_file, permission_hint, purge_held, remove_empty_dirs
+from kutil.media import is_junk
 from kutil.text import normalize
 
 from . import calibre, epub, series
@@ -22,11 +23,6 @@ from .providers import BookMatch, Lookup
 
 TORRENT_FIELDS = ["id", "name", "hashString", "downloadDir", "percentDone", "leftUntilDone", "sizeWhenDone",
                   "doneDate", "status", "magnetLink", "metadataPercentComplete"]
-# The only leftovers an import may delete. Anything else could be something you want, so its source is left alone.
-JUNK_EXT = {".nfo", ".txt", ".url", ".lnk", ".html", ".htm", ".sfv", ".md5", ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp",
-            ".torrent", ".opf", ".db", ".ini"}
-JUNK_NAMES = {".ds_store"}
-HOLD_DAYS = 30      # how long files an import cleared out are kept in the holding folder
 GB = 1024 ** 3
 
 
@@ -420,8 +416,7 @@ def plan_ok(plan: Plan) -> bool:
 
 def other_media(plan: Plan) -> list[str]:
     """Files in the source that aren't books or known junk: never delete those or drop the torrent without being told to."""
-    return [rel for rel, _ in plan.leftovers
-            if os.path.splitext(rel)[1].lower() not in JUNK_EXT and os.path.basename(rel).lower() not in JUNK_NAMES]
+    return [rel for rel, _ in plan.leftovers if not is_junk(rel)]
 
 
 def kept_duplicates(plan: Plan) -> list["Book"]:
@@ -482,23 +477,6 @@ def scan_kavita(cfg: dict, kavita) -> str:
         return f"Kavita scan failed: {e}"
 
 
-def purge_held(cfg: dict) -> None:
-    """Permanently remove operations' folders past their time. Only folders named as this code names them."""
-    hold = cfg["holding_dir"]
-    try:
-        names = os.listdir(hold)
-    except OSError:
-        return
-    cutoff = time.time() - HOLD_DAYS * 86400
-    for name in names:
-        path = os.path.join(hold, name)
-        try:
-            if name.isdecimal() and not os.path.islink(path) and os.path.isdir(path) and os.path.getmtime(path) < cutoff:
-                shutil.rmtree(path, ignore_errors=True)
-        except OSError:
-            pass
-
-
 def apply_plan(plan: Plan, cfg: dict, db: DB, transmission=None, kavita=None, lookup: Lookup | None = None,
                remove_torrent: bool | None = None, delete_leftovers: bool | None = None, log=None) -> Result:
     log = log or (lambda m: None)
@@ -512,7 +490,7 @@ def apply_plan(plan: Plan, cfg: dict, db: DB, transmission=None, kavita=None, lo
     if not plan_ok(plan):
         problems = plan.global_errors + [f"{b.info.title or b.files[0]}: {b.error}" for b in plan.books if b.error]
         raise PlanError("plan has problems: " + "; ".join(problems)[:400])
-    purge_held(cfg)
+    purge_held(cfg["holding_dir"])
     single = os.path.isfile(plan.root)
     base = os.path.dirname(plan.root) if single else plan.root
     torrent = plan.torrent
