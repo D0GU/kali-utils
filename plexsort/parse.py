@@ -254,7 +254,10 @@ def clean_title(raw: str, cut_marketing: bool = True, recase: bool = True, keep_
     title = re.sub(r"[\[({][^\])}]*$", "", title)
     title = re.sub(r"\[[^\]]*\]", "", title)
     if keep_years:
-        title = re.sub(r"\s*\((?:19|20)\d\d\)\s*$", "", title)     # a '(2019)' tag on the end isn't part of the name
+        title = title.rstrip(" ._-")
+        title = re.sub(r"\s*\((?:19|20)\d\d(?:\s*[-–]\s*(?:\d\d){1,2})?\)$", "", title)   # a '(2019)' tag isn't part of the name
+        if cut < len(s):     # a bare year right before the release junk is the release's, but 'Anime Expo 2018' alone keeps it
+            title = re.sub(r"(?:^|\s+)(?:19|20)\d\d$", "", title)
     if cut_marketing:
         title = SEASON_TOKEN_RE.sub("", title.rstrip(" ._-")) or title
         title = MARKETING_RE.sub("", title) or title   # "The Complete Savages" must not vanish entirely

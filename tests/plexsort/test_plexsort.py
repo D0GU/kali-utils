@@ -367,5 +367,21 @@ class TestTUISmoke(EngineCase):
         self.keys("q")
 
 
+class TestYearsInNames(unittest.TestCase):
+    """Finding 8: a release year goes, a year that's part of the name stays."""
+
+    def test_names(self):
+        table = {"Pilot 2019 1080p": "Pilot", "2019 1080p": "", "Making Of 2019 1080p": "Making Of", "Making Of (2019) - 1080p": "Making Of",
+                 "Making Of (2019)": "Making Of", "Making Of (2018-2019)": "Making Of", "Making Of (2018-19) 720p": "Making Of",
+                 "Making Of - (2019)": "Making Of", "At Anime Expo 2018 Interview With Staff": "At Anime Expo 2018 Interview With Staff",
+                 "At Anime Expo 2018": "At Anime Expo 2018", "Blade Runner 2049 Featurette 1080p": "Blade Runner 2049 Featurette"}
+        for raw, want in table.items():
+            with self.subTest(raw):
+                self.assertEqual(clean_title(raw, cut_marketing=False, recase=False, keep_years=True)[0], want)
+
+    def test_movie_titles_still_end_at_the_year(self):
+        self.assertEqual(clean_title("Blade Runner 2049 1080p"), ("Blade Runner", 2049))
+
+
 if __name__ == "__main__":
     unittest.main()

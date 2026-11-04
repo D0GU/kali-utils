@@ -188,6 +188,18 @@ class TestSettings(Base):
         code, _, err = self.run_cli("config", "set", "min_free_gb", "many")
         self.assertIn("whole number", err)
 
+    def test_a_one_off_url_is_not_saved(self):
+        before = config.load()["url"]
+        self.ok("--url", "http://one-off:5000", "config", "set", "online", "false")
+        self.assertEqual(config.load()["url"], before)
+        self.assertFalse(config.load()["online"])
+
+    def test_an_address_set_on_purpose_is_saved(self):
+        self.ok("config", "set", "url", "http://chosen:5000")
+        self.assertEqual(config.load()["url"], "http://chosen:5000")
+        self.ok("--url", "http://one-off:5000", "config", "set", "url", "http://also-chosen:5000")
+        self.assertEqual(config.load()["url"], "http://also-chosen:5000")
+
     def test_environment_overrides_are_not_saved(self):
         with mock.patch.dict(os.environ, {"KVCTL_API_KEY": "from-env", "KVCTL_URL": "http://env:1"}):
             self.ok("config", "set", "min_free_gb", "5")

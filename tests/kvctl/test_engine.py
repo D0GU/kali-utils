@@ -265,6 +265,81 @@ class TestHoldingFolder(Base):
         engine.purge_held(self.cfg)
 
 
+class TestBooksWithNoId(Base):
+    """Finding 4: folders with no id all read as id 0, and must not share one series assignment."""
+
+    def no_id_book(self, title, author, folder):
+        path = f"{self.ws.books}/{author}/{folder}"
+        make_epub(f"{path}/{title} - {author}.epub", title, [author])
+        return path
+
+    def test_series_grouping_keeps_them_apart(self):
+        one = self.no_id_book("Foo Book 1", "Ann Lee", "Foo Book 1")
+        two = self.no_id_book("Foo Book 2", "Ann Lee", "Foo Book 2")
+        self.no_id_book("Unrelated", "Bob Ray", "Unrelated")
+        fixes = {os.path.basename(f.book.path): (f.series, f.index) for f in engine.series_fix_plan(self.cfg)}
+        self.assertEqual(fixes, {"Foo Book 1": ("Foo", 1.0), "Foo Book 2": ("Foo", 2.0)})
+        self.assertTrue(one and two)
+
+    def test_an_import_only_brings_along_books_of_its_series(self):
+        self.no_id_book("Deep Dive 101", "Ann Lee", "Deep Dive 101")
+        self.no_id_book("Unrelated", "Bob Ray", "Unrelated")
+        make_epub(f"{self.ws.inbox}/Pack/a.epub", "Deep Dive 102", ["Ann Lee"])
+        plan = self.plan(self.folder_source("Pack"))
+        self.assertEqual([f.book.info.title for f in plan.series_partners], ["Deep Dive 101"])
+
+
+class TestRolesInsideEpub(Base):
+    """Finding 5: an EPUB3 translator isn't an author."""
+
+    def book(self, role_meta):
+        path = f"{self.ws.inbox}/Pack/a.epub"
+        make_epub(path, "Roles", ["Alice Author"])
+        with zipfile.ZipFile(path) as z:
+            items = {n: z.read(n) for n in z.namelist()}
+        opf = items["OEBPS/content.opf"].decode()
+        opf = opf.replace("<dc:language>", f'<dc:creator id="c2">Tom Translator</dc:creator>{role_meta}<dc:language>')
+        items["OEBPS/content.opf"] = opf.encode()
+        with zipfile.ZipFile(path, "w") as z:
+            for name, data in items.items():
+                z.writestr(name, data)
+        return path
+
+    def test_a_translator_declared_by_a_refinement_is_not_read_as_an_author(self):
+        path = self.book('<meta refines="#c2" property="role">trl</meta>')
+        self.assertEqual(read_book(path)[0].authors, ["Alice Author"])
+
+    def test_a_refinement_saying_author_counts(self):
+        path = self.book('<meta refines="#c2" property="role">aut</meta>')
+        self.assertEqual(read_book(path)[0].authors, ["Alice Author", "Tom Translator"])
+
+    def test_importing_does_not_promote_the_translator(self):
+        self.book('<meta refines="#c2" property="role">trl</meta>')
+        self.apply(self.plan(self.folder_source("Pack")))
+        moved = next(f for f in self.ws.tree(self.ws.books) if f.endswith(".epub"))
+        self.assertEqual(epub.read_authors(os.path.join(self.ws.books, moved)), ["Alice Author"])
+
+
+class TestClearingASeries(Base):
+    """Finding 6."""
+
+    def moved(self):
+        return os.path.join(self.ws.books, next(f for f in self.ws.tree(self.ws.books) if f.endswith(".epub")))
+
+    def test_a_series_cleared_in_the_review_leaves_the_book(self):
+        make_epub(f"{self.ws.inbox}/Pack/a.epub", "Book", series="Wrong Series", index=2)
+        plan = self.plan(self.folder_source("Pack"))
+        plan.books[0].info.series, plan.books[0].info.series_index = "", None
+        self.apply(plan)
+        self.assertEqual(epub.read_series(self.moved()), ("", None))
+
+    def test_a_series_nobody_cleared_stays_even_if_a_sidecar_omits_it(self):
+        make_epub(f"{self.ws.inbox}/Pack/a.epub", "Book", series="Keep Me", index=2)
+        write_file(f"{self.ws.inbox}/Pack/metadata.opf", calibre.write_opf(BookInfo(title="Book", authors=["Seth Ring"]), 1))
+        self.apply(self.plan(self.folder_source("Pack")))
+        self.assertEqual(epub.read_series(self.moved()), ("Keep Me", 2.0))
+
+
 class TestCalibreRules(unittest.TestCase):
     def test_paths_match_calibre(self):
         self.assertEqual(calibre.book_path("Germination: Battle Mage Farmer", "Ring, Seth", 29),
