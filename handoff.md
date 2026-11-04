@@ -25,7 +25,7 @@ Kavita v0.9.1.4 is installed and set up by the user: `/opt/Kavita`, service `kav
 - Authors: use "First Last". Merge duplicates only after showing a plan.
 - Curses UI in the same style as the other tools (the user's standing preference).
 
-**State (2026-11-03, later session): built and tested, NOT committed.** Changes are uncommitted on local branch `kvctl`; commit only when the user asks. `./run-tests.sh`: 520 pass (including bookread). `kvctl` is linked into `~/.local/bin`. The author merge, series grouping and Overlord renumbering were applied to the real library (see Next steps); nothing else there changed. `/mnt/data/kvctl` and `~/.config/kvctl` don't exist until `kvctl setup` runs.
+**State (2026-11-04): built, tested and committed locally on branch `kvctl`, not pushed or merged.** Commit only when the user asks. `./run-tests.sh`: 559 pass (including bookread). `kvctl` is linked into `~/.local/bin`. The author merge, series grouping and Overlord renumbering were applied to the real library (see Next steps); nothing else there changed. `/mnt/data/kvctl` and `~/.config/kvctl` don't exist until `kvctl setup` runs.
 
 - Added: `kvctl/cli.py`, `kvctl/tui.py`, `bin/kvctl`, `docs/kvctl.md`, `tests/kvctl/`, README and packaging entries. `Screen.run_task` and `Screen.show_text` now live in `kutil/tui.py`; plexsort and trctl use them.
 - Engine fixes beyond the plan: mixed torrents keep media and the torrent; a path named by hand keeps its other files; all-skipped plans are refused; sidecars only apply when a folder holds one book; undo checks everything before moving; symlinks ignored; ISBN and publisher no longer copied from Open Library (work-level results, arbitrary edition; it returned a Portuguese ISBN for Neuromancer). `ImportError_` is now `PlanError`.
@@ -37,6 +37,13 @@ Standalone tool in `bookread/`, manual in `docs/bookread.md`, tests in `tests/bo
 Moved out of kvctl on the user's request. Two books' progress was copied to `~/.local/share/bookread/reading.db`; the old `reading` table in kvctl's database is untouched and unused, so it can be dropped once the user is happy.
 
 Checked read-only against the real library with the user's approval: all 51 EPUBs parse; ids 5, 37 and 38 aren't EPUB and are refused. Id 9 is 4.6M words: 8.7 s to open, 1.2 s to re-lay out, 355 MiB; the others open in under 0.7 s. Page turns take about 4 ms. Tested in tmux with `xterm-256color`, not in Tabby itself, so italics and colours there are unconfirmed until the user tries it.
+
+## Code review fixes (2026-11-04, committed on `kvctl`)
+All 10 findings from the suite review are fixed. Behaviour changes to remember:
+- Imports only clear leftovers known to be junk (`engine.JUNK_EXT`); any other file keeps the whole source and its torrent.
+- Cleared files go to `holding_dir` (default `/mnt/data/kvctl-holding`, created when first needed) per operation for 30 days, journal kind `held`, and undo restores them. The `leftovers_deleted` column now only marks older imports that really deleted.
+- A skipped duplicate in a format the library lacks stays in the source (`Book.new_formats`), and its torrent stays.
+- Shared in kutil: `media.py`, `text.clean_text`, `tui.set_locale`. `fmt.table` cleans every cell.
 
 ## Next steps
 Done 2026-11-03 at the user's request: `kvctl/epub.py` writes authors and series inside EPUBs (import, edits, merge, `fix-series`; journal kind `epub`, undo restores); `kvctl/series.py` works out series from titles, and a guess only counts if it joins two books by one author. Merge applied as operation 1 on 6 books. Kavita splits Writer on commas (`ComicInfo.cs` `SplitNames`), which is why `Ring, Seth` was wrong. Backup of those 6 books' original folders: `~/.local/share/kvctl/backup-before-author-merge-2026-11-03.tar` (delete once the user is happy).

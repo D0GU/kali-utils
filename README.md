@@ -42,7 +42,7 @@ kvctl/      Kavita client, Calibre layout, book metadata readers, Open Library l
 bookread/   EPUB parsing, page layout, reading speed, curses reader and menu
 bin/        launchers used by install.sh
 docs/       one manual per tool
-tests/      tests/trctl, tests/plexsort, tests/syswatch, tests/kvctl, tests/bookread
+tests/      tests/trctl, tests/plexsort, tests/syswatch, tests/kvctl, tests/bookread, tests/kutil
 ```
 
 ## Tests
