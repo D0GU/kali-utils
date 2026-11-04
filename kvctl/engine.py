@@ -304,7 +304,7 @@ def _series_item(key, info: BookInfo) -> series.Item:
 
 def suggest_series(plan: Plan, library: list[LibBook]) -> None:
     """Give a new book the series its title states, if that joins it to another book by the same author."""
-    items = [_series_item(("lib", b.id), b.info) for b in library] + [_series_item(id(b), b.info) for b in plan.books]
+    items = [_series_item(("lib", b.path), b.info) for b in library] + [_series_item(id(b), b.info) for b in plan.books]
     found = series.assign(items)
     for b in plan.books:
         a = found.get(id(b))
@@ -886,9 +886,9 @@ def _has_epub(book: LibBook) -> bool:
 def series_fix_plan(cfg: dict, library: list[LibBook] | None = None) -> list[SeriesFix]:
     """EPUBs that Kavita would show as separate series, though they belong with another book by the same author."""
     library = library_books(cfg) if library is None else library
-    found = series.assign([_series_item(b.id, b.info) for b in library])
-    out = [SeriesFix(b, found[b.id].series, found[b.id].index, found[b.id].number_guessed) for b in library
-           if b.id in found and _has_epub(b)]
+    found = series.assign([_series_item(b.path, b.info) for b in library])     # a folder with no id reads as id 0, so not by id
+    out = [SeriesFix(b, found[b.path].series, found[b.path].index, found[b.path].number_guessed) for b in library
+           if b.path in found and _has_epub(b)]
     return sorted(out, key=lambda f: (normalize(f.series), f.index))
 
 
@@ -899,11 +899,11 @@ def _series_partners(plan: Plan, library: list[LibBook]) -> list[SeriesFix]:
     active = [b for b in plan.books if not b.skip and b.info.series and b.info.authors]
     if not active:
         return []
-    found = series.assign([_series_item(b.id, b.info) for b in library] + [_series_item(id(b), b.info) for b in active])
+    found = series.assign([_series_item(b.path, b.info) for b in library] + [_series_item(id(b), b.info) for b in active])
     wanted = [(author_key(b.info.authors[0]), b.info.series) for b in active]
     out = []
     for b in library:
-        a = found.get(b.id)
+        a = found.get(b.path)
         if a and b.info.authors and _has_epub(b) and any(
                 who == author_key(b.info.authors[0]) and series.same_series(name, a.series) for who, name in wanted):
             out.append(SeriesFix(b, a.series, a.index, a.number_guessed))
