@@ -228,14 +228,17 @@ def main_artist(name: str) -> str:
     return re.split(r"(?i)\s+(?:feat\.?|ft\.?|featuring|starring)\s+", name or "", maxsplit=1)[0].strip()
 
 
-def clean_title(raw: str, cut_marketing: bool = True, recase: bool = True) -> tuple[str, int | None]:
-    """Turn a release name into (title, year)."""
+def clean_title(raw: str, cut_marketing: bool = True, recase: bool = True, keep_years: bool = False) -> tuple[str, int | None]:
+    """Turn a release name into (title, year). A year ends a movie or show's title, and what follows is release junk.
+    Episode and extra names are different ('At Anime Expo 2018 Interview With ...'), so they pass keep_years."""
     s = despace(strip_tags(raw))
     year = None
     cut = len(s)
     if m := QUALITY_RE.search(s):
         cut = m.start()
-    if m := YEAR_RANGE_RE.search(s):
+    if keep_years:
+        pass
+    elif m := YEAR_RANGE_RE.search(s):
         if m.start() > 0:
             year = int(m.group(1))
             cut = min(cut, m.start())
@@ -250,6 +253,8 @@ def clean_title(raw: str, cut_marketing: bool = True, recase: bool = True) -> tu
     # cut an unclosed bracket left over from "(1993 BluRay ...)" style names
     title = re.sub(r"[\[({][^\])}]*$", "", title)
     title = re.sub(r"\[[^\]]*\]", "", title)
+    if keep_years:
+        title = re.sub(r"\s*\((?:19|20)\d\d\)\s*$", "", title)     # a '(2019)' tag on the end isn't part of the name
     if cut_marketing:
         title = SEASON_TOKEN_RE.sub("", title.rstrip(" ._-")) or title
         title = MARKETING_RE.sub("", title) or title   # "The Complete Savages" must not vanish entirely
@@ -273,7 +278,7 @@ def extra_type_of(s: str) -> str | None:
 
 
 def episode_title_after(text: str) -> str:
-    title, _ = clean_title(text.lstrip(" -._:"), cut_marketing=False)
+    title, _ = clean_title(text.lstrip(" -._:"), cut_marketing=False, keep_years=True)
     return title
 
 
@@ -355,7 +360,7 @@ def classify_video(rel: str, size: int, root_name: str, siblings: dict[str, list
 
     if marker and marker[0] == "extra":
         item.kind, item.extra_type = "extra", marker[1]
-        item.extra_name = clean_title(stem, cut_marketing=False, recase=False)[0] or stem
+        item.extra_name = clean_title(stem, cut_marketing=False, recase=False, keep_years=True)[0] or stem
         item.note = "extra (folder/name marker)"
         _assign_show_title(item, "", dirs, root_name)
         return item
@@ -397,7 +402,7 @@ def classify_video(rel: str, size: int, root_name: str, siblings: dict[str, list
         item.note = "special/OVA (folder/name marker)"
         if item.episode is None and (m := LEADING_NUM_RE.match(tagless) or EPWORD_RE.search(tagless)):
             item.episode = int(m.group(1))
-        item.ep_title = clean_title(re.sub(r"^\d+(?:\.\d+)?\s*-\s*", "", tagless), cut_marketing=False)[0]
+        item.ep_title = clean_title(re.sub(r"^\d+(?:\.\d+)?\s*-\s*", "", tagless), cut_marketing=False, keep_years=True)[0]
         _assign_show_title(item, "", dirs, root_name)
         return item
 

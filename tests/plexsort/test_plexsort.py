@@ -45,6 +45,24 @@ def make_tree(base: str, name: str, files: list[str]) -> str:
 
 
 class TestParse(unittest.TestCase):
+    def test_a_year_does_not_cut_an_extra_or_episode_name(self):
+        extras = ["Extras/[Judas] Overlord 2 - At Anime Expo 2018 A Message From Minoru Ashina.mkv",
+                  "Extras/[Judas] Overlord 2 - At Anime Expo 2018 Interview With Kugane Maruyama & Naoyuki Itou.mkv"]
+        items = build_items("Overlord", [(f, 10 ** 8) for f in extras])[0]
+        self.assertEqual(sorted(i.extra_name for i in items),
+                         ["Overlord 2 - At Anime Expo 2018 A Message From Minoru Ashina",
+                          "Overlord 2 - At Anime Expo 2018 Interview With Kugane Maruyama & Naoyuki Itou"])
+        self.assertEqual({i.kind for i in items}, {"extra"})
+        ep = build_items("Show", [("Show.S01E02.The.Summer.of.1969.Part.Two.1080p.mkv", 2_000_000_000)])[0][0]
+        self.assertEqual(ep.ep_title, "The Summer of 1969 Part Two")
+
+    def test_release_junk_still_goes_from_those_names(self):
+        ep = build_items("Show", [("Show.S01E02.Pilot.1080p.WEB-DL.mkv", 2_000_000_000)])[0][0]
+        self.assertEqual(ep.ep_title, "Pilot")
+        tagged = build_items("Show", [("Extras/Making Of (2019) [BD 1080p].mkv", 10 ** 8)])[0][0]
+        self.assertEqual(tagged.extra_name, "Making Of")
+        self.assertEqual(clean_title("Some.Movie.2019.1080p")[1], 2019)     # movies still end at the year
+
     def items(self, root, files):
         items, leftovers, incomplete = build_items(root, [(f, 2_000_000_000) for f in files])
         return {i.src: i for i in items}, leftovers, incomplete
