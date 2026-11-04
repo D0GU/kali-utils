@@ -11,10 +11,10 @@ import os
 import re
 from collections import Counter
 
+from kutil.media import AUDIO_EXT
+
 from .parse import YEAR_RE, Item, despace, find_year, main_artist, normalize, smart_case, strip_numbering
 
-AUDIO_EXT = {".flac", ".mp3", ".m4a", ".aac", ".ogg", ".oga", ".opus", ".wav", ".aiff", ".aif", ".wma", ".ape",
-             ".wv", ".alac", ".dsf", ".dff", ".mka"}
 ART_EXT = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
 ALBUM_FILE_EXT = {".cue", ".log"}
 COVER_NAMES = {"cover", "folder", "front", "albumart", "album", "poster"}

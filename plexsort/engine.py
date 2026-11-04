@@ -8,6 +8,7 @@ import shutil
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
+from kutil.media import VIDEO_EXT
 from kutil.fsops import MoveRefused, move_file, permission_hint, remove_empty_dirs
 
 from . import naming, space
@@ -493,7 +494,7 @@ def retitle(title_id: int, new_title: str, new_year: int | None, new_ids: dict, 
 FOLDER_RE = re.compile(r"^(?P<title>.+?)(?: \((?P<year>\d{4})\))?(?: \{(?P<src>tvdb|tmdb|imdb)-(?P<id>[^}]+)\})?$")
 EPISODE_FILE_RE = re.compile(r"(?i)\bs(\d{1,2})e(\d{1,4})(?:-e(\d{1,4}))?\b(?: - (.+))?$")
 SUB_EXTS = (".srt", ".ass", ".ssa", ".sub", ".idx", ".vtt", ".sup")
-VIDEO_EXTS = (".mkv", ".mp4", ".m4v", ".avi", ".mov", ".wmv", ".ts", ".m2ts", ".webm", ".mpg")
+VIDEO_EXTS = tuple(VIDEO_EXT)
 
 
 MUSIC_FILE_RE = re.compile(r"^(?:(\d{1,2})-)?(\d{1,3}) - (.+)$")

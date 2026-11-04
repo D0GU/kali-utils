@@ -13,10 +13,9 @@ import string
 from collections import Counter
 from dataclasses import dataclass, field
 
+from kutil.media import VIDEO_EXT
 from kutil.text import normalize
 
-VIDEO_EXT = {".mkv", ".mp4", ".m4v", ".avi", ".mov", ".wmv", ".mpg", ".mpeg", ".ts", ".m2ts",
-             ".webm", ".flv", ".ogm", ".divx", ".vob"}
 SUB_EXT = {".srt", ".ass", ".ssa", ".sub", ".idx", ".vtt", ".sup", ".smi"}
 
 KINDS = ["movie", "episode", "extra", "track", "skip"]
