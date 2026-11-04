@@ -21,6 +21,8 @@ from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from typing import NamedTuple
 
+from kutil.text import clean_text
+
 BOLD, ITALIC = 1, 2
 MAX_PACKAGE = 4 * 1024 ** 2          # the package document and contents list
 MAX_DOCUMENT = 64 * 1024 ** 2       # one chapter, unpacked
@@ -35,8 +37,6 @@ HIDDEN_TAGS = {"head", "title", "script", "style", "template"}
 VOID_TAGS = {"br", "hr", "img", "image", "meta", "link", "input", "wbr", "col", "area", "base", "embed", "source", "track"}
 TAG_STYLES = {"b": BOLD, "strong": BOLD, "i": ITALIC, "em": ITALIC, "cite": ITALIC, "dfn": ITALIC, "var": ITALIC}
 
-# Control and invisible characters. Escapes must never reach the terminal, and these have no width to lay out.
-_INVISIBLE = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x84\x86-\x9f­​-‏‪-‮⁠-⁤﻿]")
 _SPACE = re.compile(r"\s+")
 _CJK = "⺀-⿿、-꓏가-힣豈-﫿＀-￯\U00020000-\U0003ffff"
 # Each CJK character can end a line, which is how those scripts wrap, so each counts as one here.
@@ -135,10 +135,6 @@ class Book:
         """Where the chapter holding this word stops."""
         i = bisect_right(self._chapter_words, word)
         return self._chapter_words[i] if i < len(self._chapter_words) else self.words
-
-
-def clean_text(text: str) -> str:
-    return unicodedata.normalize("NFC", _INVISIBLE.sub("", text))
 
 
 def _style_of(declarations: str, current: int = 0) -> int:

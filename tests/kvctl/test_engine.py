@@ -289,6 +289,16 @@ class TestBooksWithNoId(Base):
         self.assertEqual([f.book.info.title for f in plan.series_partners], ["Deep Dive 101"])
 
 
+class TestUntrustedNames(Base):
+    """Finding 9: control characters in names would reach the terminal and make metadata.opf unreadable."""
+
+    def test_they_never_reach_the_metadata(self):
+        info = read_book(make_epub(f"{self.ws.root}/Evil\x1b[31m\x07 Book - Ann\x1b Lee.epub", ""))[0]
+        self.assertNotIn("\x1b", info.title + "".join(info.authors))
+        self.assertNotIn("\x07", info.title)
+        ET.fromstring(calibre.write_opf(info, 1))      # still valid XML
+
+
 class TestRolesInsideEpub(Base):
     """Finding 5: an EPUB3 translator isn't an author."""
 

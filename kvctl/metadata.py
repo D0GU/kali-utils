@@ -12,6 +12,8 @@ import xml.etree.ElementTree as ET
 import zipfile
 import zlib
 
+from kutil.text import clean_text
+
 from .calibre import BookInfo
 
 BOOK_EXT = {".epub", ".kepub", ".mobi", ".azw", ".azw3", ".fb2", ".pdf", ".lit", ".djvu", ".txt.zip", ".fb2.zip"}
@@ -45,7 +47,7 @@ def _parse(data: bytes):
 
 
 def _clean(text: str | None) -> str:
-    return re.sub(r"\s+", " ", (text or "").strip())
+    return re.sub(r"\s+", " ", clean_text(text or "").strip())
 
 
 def _year_ok(date: str) -> str:
@@ -193,7 +195,7 @@ def read_mobi(path: str) -> tuple[BookInfo, bytes | None, str]:
 
 def from_filename(path: str) -> BookInfo:
     """'Title - Author.epub' (Calibre's own pattern), else the whole name as the title."""
-    stem = os.path.basename(path)
+    stem = clean_text(os.path.basename(path))
     stem = stem[:-len(book_ext(path))] if book_ext(path) else stem
     stem = re.sub(r"\s*[\[(](?:epub|mobi|pdf|azw3|retail|z-lib[^\])]*)[\])]\s*$", "", stem, flags=re.I)
     stem = re.sub(r"[._]+", lambda m: " " if " " not in stem else m.group(0), stem).strip()

@@ -11,6 +11,7 @@ import sys
 
 from kutil import fmt
 from kutil.fmt import paint
+from kutil.text import clean_text
 from trctl.config import ConfigError, load_settings
 from trctl.rpc import Client, RPCError
 
@@ -94,7 +95,7 @@ def build(source, cfg, db, offline: bool) -> tuple[engine.Plan, list[str], Looku
 
 
 def print_plan(plan: engine.Plan, cfg: dict, args=None) -> None:
-    print(paint(plan.name, "bold"), paint(f"({plan.root})", "dim"))
+    print(paint(clean_text(plan.name), "bold"), paint(clean_text(f"({plan.root})"), "dim"))
     for b in plan.books:
         who = ", ".join(b.info.authors) or "?"
         if b.skip:
@@ -108,9 +109,9 @@ def print_plan(plan: engine.Plan, cfg: dict, args=None) -> None:
         series = f" [{b.info.series}{f' #{b.info.series_index:g}' if b.info.series_index is not None else ''}]" if b.info.series else ""
         print(f"\n{status} {paint(b.info.title or '(no title)', 'bold')} - {who}{series}")
         print(paint(f"    from {b.source}" + (f", checked with {b.verified}" if b.verified else "")
-                    + f"; {', '.join(b.files)}", "dim"))
+                    + clean_text(f"; {', '.join(b.files)}"), "dim"))
         if b.dest:
-            print(f"    → {os.path.relpath(b.dest, cfg['books_dir'])}")
+            print(clean_text(f"    → {os.path.relpath(b.dest, cfg['books_dir'])}"))
         if b.error:
             print(paint(f"    ✗ {b.error}", "red"))
         elif b.warning:
@@ -129,13 +130,13 @@ def print_plan(plan: engine.Plan, cfg: dict, args=None) -> None:
         print(paint(f"Holds {len(engine.other_media(plan))} other file(s): those stay where they are.", "yellow"))
     skipped = {f for b in plan.books if b.skip for f in b.files}
     for b in engine.kept_duplicates(plan):
-        print(paint(f"Keeps {', '.join(b.files)} in the source: not imported, and the library lacks that format.", "yellow"))
+        print(paint(clean_text(f"Keeps {', '.join(b.files)} in the source: not imported, and the library lacks that format."), "yellow"))
     delete_books = [f for f in delete if f in skipped]
     delete_others = [f for f in delete if f not in skipped]
     if delete_books:
-        print(paint(f"Moves {len(delete_books)} skipped book file(s) to the holding folder: ", "yellow") + paint(", ".join(delete_books[:6]) + (" …" if len(delete_books) > 6 else ""), "dim"))
+        print(paint(f"Moves {len(delete_books)} skipped book file(s) to the holding folder: ", "yellow") + paint(clean_text(", ".join(delete_books[:6])) + (" …" if len(delete_books) > 6 else ""), "dim"))
     if delete_others:
-        print(paint(f"Moves {len(delete_others)} other file(s) to the holding folder: ", "yellow") + paint(", ".join(delete_others[:6]) + (" …" if len(delete_others) > 6 else ""), "dim"))
+        print(paint(f"Moves {len(delete_others)} other file(s) to the holding folder: ", "yellow") + paint(clean_text(", ".join(delete_others[:6])) + (" …" if len(delete_others) > 6 else ""), "dim"))
     elif plan.leftovers:
         print(paint(f"Leaves {len(plan.leftovers)} other file(s) in place.", "dim"))
     if plan.torrent:

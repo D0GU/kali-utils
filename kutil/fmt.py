@@ -6,6 +6,8 @@ import shutil
 import time
 import unicodedata
 
+from .text import clean_text
+
 _CODES = {"bold": "1", "dim": "2", "red": "31", "green": "32", "yellow": "33",
           "blue": "34", "magenta": "35", "cyan": "36"}
 
@@ -112,8 +114,8 @@ def table(headers: list[str], rows: list[list], aligns: str, flex: int | None = 
     """
     def split(cell):
         if isinstance(cell, tuple):
-            return str(cell[0]), cell[1:]
-        return str(cell), ()
+            return clean_text(str(cell[0])), cell[1:]
+        return clean_text(str(cell)), ()
 
     cells = [[split(c) for c in row] for row in rows]
     widths = [text_width(h) for h in headers]

@@ -12,7 +12,7 @@ import unittest
 from unittest import mock
 
 from kvctl import cli, config
-from tests.kvctl.helpers import API_KEY, FakeKavita, Workspace, make_epub
+from tests.kvctl.helpers import API_KEY, FakeKavita, Workspace, make_epub, write_file
 
 
 class Base(unittest.TestCase):
@@ -187,6 +187,13 @@ class TestSettings(Base):
         self.assertEqual(code, 1)
         code, _, err = self.run_cli("config", "set", "min_free_gb", "many")
         self.assertIn("whole number", err)
+
+    def test_a_file_name_cannot_send_escapes_to_the_terminal(self):
+        make_epub(f"{self.ws.inbox}/Pack\x1b[2J/evil\x1b]0;PWNED\x07 - Ann Lee.epub", "")
+        write_file(f"{self.ws.inbox}/Pack\x1b[2J/x\x1b[31m.nfo")
+        out = self.ok("--offline", "plan", "Pack")
+        self.assertNotIn("\x1b", out)
+        self.assertNotIn("\x07", out)
 
     def test_a_one_off_url_is_not_saved(self):
         before = config.load()["url"]

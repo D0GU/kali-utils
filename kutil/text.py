@@ -1,9 +1,17 @@
-"""Comparing titles and names."""
+"""Comparing titles and names, and cleaning text that came from files or the internet."""
 
 from __future__ import annotations
 
 import difflib
 import re
+import unicodedata
+
+# Control and invisible characters. Escapes must never reach a terminal, and these have no width to lay out.
+_INVISIBLE = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x84\x86-\x9f\u00ad\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff]")
+
+
+def clean_text(text: str) -> str:
+    return unicodedata.normalize("NFC", _INVISIBLE.sub("", text))
 
 
 def normalize(s: str) -> str:
