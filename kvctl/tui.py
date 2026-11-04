@@ -46,7 +46,8 @@ REVIEW  (nothing is moved until you press a)
   Space             skip / include a book
   a                 apply: move books, write metadata, clean up, scan Kavita
   Status column:    ✓ ok   ! warning   ✗ must be fixed   - skipped
-  Applying deletes skipped books and other files in the source, after showing them.
+  Applying moves skipped books and other files in the source to the holding folder, after showing them.
+  They stay there 30 days, and undo puts them back.
   A folder opened with o, or a torrent that also holds other kinds of file, keeps them.
 
 BOOKS  (what is in the Books folder)
@@ -179,7 +180,7 @@ class Review:
         out += [(f"Also adds {f.book.info.title} to {f.series}, as #{f.index:g} (already in the library)", th("yellow")) for f in plan.series_partners]
         delete = engine.files_to_delete(plan, cfg)
         if delete:
-            out.append((f"Applying deletes {len(delete)} file(s) from the source: " + ", ".join(delete[:4]) + (" …" if len(delete) > 4 else ""), th("dim")))
+            out.append((f"Applying moves {len(delete)} file(s) to the holding folder: " + ", ".join(delete[:4]) + (" …" if len(delete) > 4 else ""), th("dim")))
         elif plan.leftovers:
             out.append((f"{len(plan.leftovers)} other file(s) stay in the source", th("dim")))
         return out
@@ -241,10 +242,10 @@ class Review:
         lines += [f"Add {f.book.info.title} to {f.series}, as #{f.index:g}" for f in plan.series_partners]
         skipped = {r for b in plan.books if b.skip for r in b.files}
         if skipped & set(delete):
-            lines.append(f"Delete {len(skipped & set(delete))} skipped book file(s)")
+            lines.append(f"Move {len(skipped & set(delete))} skipped book file(s) to the holding folder")
         others = [r for r in delete if r not in skipped]
         if others:
-            lines.append(f"Delete {len(others)} other file(s): " + ", ".join(others[:3]) + (" …" if len(others) > 3 else ""))
+            lines.append(f"Move {len(others)} other file(s) to the holding folder: " + ", ".join(others[:3]) + (" …" if len(others) > 3 else ""))
         lines += [f"Keep {', '.join(b.files)} in the source: the library lacks that format" for b in engine.kept_duplicates(plan)]
         if engine.other_media(plan):
             lines.append(f"Keep the torrent and {len(engine.other_media(plan))} other file(s)")
@@ -252,7 +253,7 @@ class Review:
             lines.append("Remove the torrent from Transmission" if engine.will_remove_torrent(plan, cfg) else "Keep the torrent, stopped")
         options = [("a", "Import", "green")]
         if delete or engine.will_remove_torrent(plan, cfg):
-            options.append(("k", "Import, but delete nothing" + (" and keep the torrent" if plan.torrent else ""), "yellow"))
+            options.append(("k", "Import, but move nothing else" + (" and keep the torrent" if plan.torrent else ""), "yellow"))
         options.append(("c", "Cancel", ""))
         picked = choose(app, "Apply", lines, options)
         if picked not in ("a", "k"):
@@ -838,7 +839,7 @@ class App(Screen):
             return self.flash("Already undone", "info")
         lines = [f"Undo operation {op['id']}: {op['kind']} of {op['source_name'] or ''}?"]
         if op["leftovers_deleted"]:
-            lines.append("Leftover files it deleted can't be restored.")
+            lines.append("This older import deleted its leftover files, and those can't be restored.")
         options = [("u", "Undo", "yellow")]
         if op["torrent_removed"] and op["magnet"] and self.transmission:
             options.append(("r", "Undo and re-add the torrent", "yellow"))
@@ -869,7 +870,8 @@ class App(Screen):
                   Field("online", "Check books online", "bool", c["online"]),
                   Field("scan_after_import", "Scan after changes", "bool", c["scan_after_import"]),
                   Field("remove_torrent", "Remove torrents", "bool", c["remove_torrent"]),
-                  Field("delete_leftovers", "Delete leftovers", "bool", c["delete_leftovers"]),
+                  Field("delete_leftovers", "Clear leftovers", "bool", c["delete_leftovers"], hint="move them to the holding folder for 30 days"),
+                  Field("holding_dir", "Holding folder", "path", c["holding_dir"]),
                   Field("min_free_gb", "Keep free (GB)", "int", c["min_free_gb"])]
 
         def validate(v):
@@ -882,6 +884,7 @@ class App(Screen):
                  remove_torrent=values["remove_torrent"], delete_leftovers=values["delete_leftovers"],
                  library_id=values["library_id"], min_free_gb=values["min_free_gb"] or 0,
                  books_dir=os.path.abspath(os.path.expanduser(values["books_dir"])),
+                 holding_dir=os.path.abspath(os.path.expanduser(values["holding_dir"] or c["holding_dir"])),
                  inbox_dirs=[os.path.abspath(os.path.expanduser(d.strip())) for d in values["inbox_dirs"].split(",") if d.strip()])
         config.save(c)
         self.kavita.url = c["url"].rstrip("/")

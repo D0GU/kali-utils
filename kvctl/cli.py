@@ -133,9 +133,9 @@ def print_plan(plan: engine.Plan, cfg: dict, args=None) -> None:
     delete_books = [f for f in delete if f in skipped]
     delete_others = [f for f in delete if f not in skipped]
     if delete_books:
-        print(paint(f"Deletes {len(delete_books)} skipped book file(s): ", "yellow") + paint(", ".join(delete_books[:6]) + (" …" if len(delete_books) > 6 else ""), "dim"))
+        print(paint(f"Moves {len(delete_books)} skipped book file(s) to the holding folder: ", "yellow") + paint(", ".join(delete_books[:6]) + (" …" if len(delete_books) > 6 else ""), "dim"))
     if delete_others:
-        print(paint(f"Deletes {len(delete_others)} other file(s): ", "yellow") + paint(", ".join(delete_others[:6]) + (" …" if len(delete_others) > 6 else ""), "dim"))
+        print(paint(f"Moves {len(delete_others)} other file(s) to the holding folder: ", "yellow") + paint(", ".join(delete_others[:6]) + (" …" if len(delete_others) > 6 else ""), "dim"))
     elif plan.leftovers:
         print(paint(f"Leaves {len(plan.leftovers)} other file(s) in place.", "dim"))
     if plan.torrent:
@@ -326,7 +326,7 @@ def cmd_undo(args, cfg, db) -> int:
     if not op:
         raise CLIError(f"no operation {args.op_id}")
     if op["leftovers_deleted"]:
-        print(paint("Leftover files this import deleted can't be restored.", "yellow"))
+        print(paint("This older import deleted its leftover files, and those can't be restored.", "yellow"))
     if not confirm(args, f"Undo operation {args.op_id} ({op['kind']}: {op['source_name']})?"):
         return 1
     client = connect_transmission() if args.readd else None
@@ -632,7 +632,7 @@ def build_parser() -> argparse.ArgumentParser:
     g = sp.add_mutually_exclusive_group()
     g.add_argument("--keep-torrent", action="store_true", help="don't remove the torrent from Transmission")
     g.add_argument("--remove-torrent", action="store_true", help="remove it even if it holds other files")
-    sp.add_argument("--keep-leftovers", action="store_true", help="don't delete other files in the source")
+    sp.add_argument("--keep-leftovers", action="store_true", help="leave other files in the source")
     sp = add("books", cmd_books, "List books in the Books folder")
     sp.add_argument("-q", "--search", help="words in the title, author or series")
     sp.add_argument("--author", help="only this author, in any name order")

@@ -26,6 +26,7 @@ TORRENT_FIELDS = ["id", "name", "hashString", "downloadDir", "percentDone", "lef
 JUNK_EXT = {".nfo", ".txt", ".url", ".lnk", ".html", ".htm", ".sfv", ".md5", ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp",
             ".torrent", ".opf", ".db", ".ini"}
 JUNK_NAMES = {".ds_store"}
+HOLD_DAYS = 30      # how long files an import cleared out are kept in the holding folder
 GB = 1024 ** 3
 
 
@@ -454,7 +455,7 @@ class Result:
     imported: int = 0
     errors: list = field(default_factory=list)
     torrent_removed: bool = False
-    leftovers_deleted: int = 0
+    held: int = 0       # files moved to the holding folder
     scanned: str = ""
 
 
@@ -478,6 +479,23 @@ def scan_kavita(cfg: dict, kavita) -> str:
         return f"Kavita scan failed: {e}"
 
 
+def purge_held(cfg: dict) -> None:
+    """Permanently remove operations' folders past their time. Only folders named as this code names them."""
+    hold = cfg["holding_dir"]
+    try:
+        names = os.listdir(hold)
+    except OSError:
+        return
+    cutoff = time.time() - HOLD_DAYS * 86400
+    for name in names:
+        path = os.path.join(hold, name)
+        try:
+            if name.isdecimal() and not os.path.islink(path) and os.path.isdir(path) and os.path.getmtime(path) < cutoff:
+                shutil.rmtree(path, ignore_errors=True)
+        except OSError:
+            pass
+
+
 def apply_plan(plan: Plan, cfg: dict, db: DB, transmission=None, kavita=None, lookup: Lookup | None = None,
                remove_torrent: bool | None = None, delete_leftovers: bool | None = None, log=None) -> Result:
     log = log or (lambda m: None)
@@ -491,6 +509,7 @@ def apply_plan(plan: Plan, cfg: dict, db: DB, transmission=None, kavita=None, lo
     if not plan_ok(plan):
         problems = plan.global_errors + [f"{b.info.title or b.files[0]}: {b.error}" for b in plan.books if b.error]
         raise PlanError("plan has problems: " + "; ".join(problems)[:400])
+    purge_held(cfg)
     single = os.path.isfile(plan.root)
     base = os.path.dirname(plan.root) if single else plan.root
     torrent = plan.torrent
@@ -563,12 +582,14 @@ def apply_plan(plan: Plan, cfg: dict, db: DB, transmission=None, kavita=None, lo
             p = os.path.join(base, rel)
             try:
                 if os.path.isfile(p) or os.path.islink(p):
-                    os.remove(p)
-                    res.leftovers_deleted += 1
-            except OSError as e:
-                res.errors.append(f"could not delete {rel}: {e.strerror}")
-        if res.leftovers_deleted:
-            log(f"Deleted {res.leftovers_deleted} leftover file(s)")
+                    held = os.path.join(cfg["holding_dir"], str(op), rel)
+                    move_file(p, held)
+                    db.record(op, "held", held, p, title=rel)
+                    res.held += 1
+            except (OSError, MoveRefused) as e:      # it just stays in the source
+                res.errors.append(f"could not move {rel} to the holding folder: {getattr(e, 'strerror', None) or e}")
+        if res.held:
+            log(f"Moved {res.held} other file(s) to {os.path.join(cfg['holding_dir'], str(op))}")
         # Only folders this import emptied. A path named by hand keeps its top folder, and any other empty folder in it.
         for c in db.changes(op):
             if c["kind"] == "moved":
@@ -580,8 +601,7 @@ def apply_plan(plan: Plan, cfg: dict, db: DB, transmission=None, kavita=None, lo
                         os.rmdir(dp)
                 except OSError:
                     pass
-    db.finish(op, "applied", "; ".join(res.errors), torrent_removed=res.torrent_removed,
-              leftovers_deleted=bool(res.leftovers_deleted))
+    db.finish(op, "applied", "; ".join(res.errors), torrent_removed=res.torrent_removed)
     res.scanned = scan_kavita(cfg, kavita)
     if res.scanned:
         log(res.scanned)
@@ -946,16 +966,23 @@ def undo_operation(op_id: int, cfg: dict, db: DB, transmission=None, kavita=None
     if missing:
         raise PlanError(f"{len(missing)} file(s) are no longer where this operation put them, e.g. {missing[0]}. "
                         "If a later operation moved them, undo that one first.")
-    taken = [c["src"] for c in todo if os.path.lexists(c["src"])]
+    held = [c for c in db.changes(op_id) if c["status"] == "done" and c["kind"] == "held" and os.path.lexists(c["dst"])]
+    taken = [c["src"] for c in todo + held if os.path.lexists(c["src"])]
     if taken:
         raise PlanError(f"{len(taken)} original location(s) are occupied, e.g. {taken[0]}")
-    done, errors = 0, []
+    done, errors, expired = 0, [], 0
     for c in reversed(db.changes(op_id)):
         if c["status"] != "done":
             continue
         try:
             if c["kind"] == "moved":
                 move_file(c["dst"], c["src"])
+            elif c["kind"] == "held":
+                if os.path.lexists(c["dst"]):
+                    move_file(c["dst"], c["src"])
+                    remove_empty_dirs(os.path.dirname(c["dst"]), cfg["holding_dir"])
+                else:
+                    expired += 1
             elif c["kind"] == "created":
                 if os.path.exists(c["dst"]):
                     os.remove(c["dst"])
@@ -972,6 +999,8 @@ def undo_operation(op_id: int, cfg: dict, db: DB, transmission=None, kavita=None
         except (OSError, MoveRefused, epub.EpubError) as e:
             errors.append(permission_hint(e) if isinstance(e, OSError) else str(e))
     msg = f"undone: {done} change(s)"
+    if expired:
+        msg += f"; {expired} other file(s) no longer held, past {HOLD_DAYS} days"
     if readd_torrent and op["torrent_removed"] and op["magnet"] and transmission is not None:
         try:
             transmission.torrent_add(filename=op["magnet"], download_dir=op["download_dir"], paused=False)

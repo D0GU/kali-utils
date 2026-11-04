@@ -114,7 +114,7 @@ class TestImportCommands(Base):
         self.assertEqual(self.ws.tree(self.ws.books), [])     # plan changes nothing
 
         out = self.ok("--offline", "plan", "Pack")
-        self.assertIn("Deletes 1 other file(s): junk.nfo", out)
+        self.assertIn("Moves 1 other file(s) to the holding folder: junk.nfo", out)
 
         out = self.ok("--offline", "import", "Pack", "-y")
         self.assertIn("Imported 1 book(s)", out)

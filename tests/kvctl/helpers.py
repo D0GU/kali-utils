@@ -62,7 +62,7 @@ class Workspace:
             os.makedirs(d)
         self.cfg = {"url": "http://127.0.0.1:1", "api_key": "", "books_dir": self.books, "inbox_dirs": [self.inbox],
                     "database": os.path.join(self.root, "state", "library.db"), "library_id": 0, "remove_torrent": True,
-                    "delete_leftovers": True, "online": False, "scan_after_import": True, "min_free_gb": 0}
+                    "delete_leftovers": True, "holding_dir": os.path.join(self.root, "holding"), "online": False, "scan_after_import": True, "min_free_gb": 0}
 
     def add_library_book(self, title: str, author: str, book_id: int, folder_author: str | None = None) -> str:
         """A book as Calibre left it, with the author in `author` and the folder named `folder_author`."""

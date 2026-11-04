@@ -15,7 +15,8 @@ DEFAULTS = {
     "database": "~/.local/share/kvctl/library.db",
     "library_id": 0,                     # Kavita library to scan after importing; 0 = the one holding books_dir
     "remove_torrent": True,
-    "delete_leftovers": True,
+    "delete_leftovers": True,            # moved to holding_dir and kept 30 days, not deleted at once
+    "holding_dir": "/mnt/data/kvctl-holding",
     "online": True,
     "scan_after_import": True,
     "min_free_gb": 2,
@@ -43,6 +44,7 @@ def load() -> dict:
         cfg["url"] = os.environ["KVCTL_URL"]
     cfg["inbox_dirs"] = [os.path.abspath(os.path.expanduser(d)) for d in cfg["inbox_dirs"]]
     cfg["books_dir"] = os.path.abspath(os.path.expanduser(cfg["books_dir"]))
+    cfg["holding_dir"] = os.path.abspath(os.path.expanduser(cfg["holding_dir"]))
     cfg["database"] = os.path.expanduser(cfg["database"])
     return cfg
 

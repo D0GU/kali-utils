@@ -40,15 +40,15 @@ kvctl undo OP              # reverses it; `kvctl history` lists operations
 
 **Duplicates** of a book already in the library start skipped; press Space to import a second copy. A skipped duplicate in a format the library doesn't have is kept in the source, not deleted, and its torrent stays.
 
-**What happens to the source** is shown before you confirm:
+**What happens to the source** is shown before you confirm. "Cleared" files move to the holding folder (default `/mnt/data/kvctl-holding`), one folder per operation, and stay there for 30 days; the next import after that removes them for good. `kvctl undo` puts them back while they're held.
 
 | Source | Other files and skipped books | Torrent |
 |---|---|---|
-| Torrent or watched folder | deleted | removed from Transmission (the moved books stay) |
+| Torrent or watched folder | known junk and skipped books cleared | removed from Transmission (the moved books stay) |
 | Torrent that also holds anything else (videos, audiobooks, archives, unknown files) | all kept | kept, stopped |
 | Path you named (`o` in the UI, or a path argument) | all kept; only the books move | - |
 
-`--keep-torrent`, `--keep-leftovers` and `--remove-torrent` override this. Files an import deleted can't be restored by undo. Settings `remove_torrent` and `delete_leftovers` change the defaults.
+`--keep-torrent`, `--keep-leftovers` and `--remove-torrent` override this. Settings `remove_torrent`, `delete_leftovers` and `holding_dir` change the defaults. Imports made before the holding folder existed deleted their leftovers, so undo can't restore those.
 
 A source with `.part` files, or a book with no title or author, can't be applied until that's fixed.
 
@@ -136,5 +136,6 @@ Kavita also only opens EPUB and PDF, so FB2 and MOBI books are stored here but d
 | `online` | `true` | check books on Open Library |
 | `scan_after_import` | `true` | ask Kavita to scan after changes |
 | `remove_torrent` | `true` | remove the torrent after importing |
-| `delete_leftovers` | `true` | delete other files in the source after importing |
+| `delete_leftovers` | `true` | clear other files from the source after importing, to the holding folder |
+| `holding_dir` | `/mnt/data/kvctl-holding` | where cleared files stay for 30 days |
 | `min_free_gb` | `2` | space to keep free when importing across drives |

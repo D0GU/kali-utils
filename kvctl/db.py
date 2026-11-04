@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS operations (
     torrent_removed INTEGER DEFAULT 0, leftovers_deleted INTEGER DEFAULT 0, message TEXT);
 CREATE TABLE IF NOT EXISTS changes (
     id INTEGER PRIMARY KEY, operation_id INTEGER REFERENCES operations(id),
-    kind TEXT NOT NULL,      -- moved | created | edited | epub (the package document inside a book, in `original`)
+    kind TEXT NOT NULL,      -- moved | created | edited | held (to the holding folder) | epub (the package document inside a book, in `original`)
     src TEXT, dst TEXT NOT NULL, original TEXT, book_id INTEGER, title TEXT, status TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS changes_op ON changes(operation_id);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);

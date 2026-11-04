@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import shutil
+import time
 import unittest
 import xml.etree.ElementTree as ET
 import zipfile
@@ -187,6 +189,80 @@ class TestDamagedBooks(Base):
         res = self.apply(self.plan(self.folder_source("Pack")))
         self.assertEqual((res.imported, res.errors), (1, []))
         self.assertEqual(self.db.operation(res.op_id)["status"], "applied")
+
+
+class TestHoldingFolder(Base):
+    def pack(self):
+        make_epub(f"{self.ws.inbox}/Pack/sub/keep.epub", "Keep")
+        make_epub(f"{self.ws.inbox}/Pack/sub/skip.epub", "Skip")
+        write_file(f"{self.ws.inbox}/Pack/sub/info.nfo", b"notes")
+        plan = self.plan(self.folder_source("Pack"))
+        next(b for b in plan.books if b.info.title == "Skip").skip = True
+        engine.check_plan(plan, self.cfg, self.db)
+        return plan
+
+    def test_cleared_files_move_to_the_holding_folder(self):
+        res = self.apply(self.pack())
+        held = f"{self.cfg['holding_dir']}/{res.op_id}"
+        self.assertEqual(self.ws.tree(held), ["sub/info.nfo", "sub/skip.epub"])
+        self.assertFalse(os.path.exists(f"{self.ws.inbox}/Pack"))
+        self.assertEqual(res.errors, [])
+        self.assertEqual(res.held, 2)
+
+    def test_undo_puts_them_back(self):
+        res = self.apply(self.pack())
+        done, errors = engine.undo_operation(res.op_id, self.cfg, self.db)
+        self.assertEqual(errors, [])
+        self.assertEqual(self.ws.tree(f"{self.ws.inbox}/Pack"), ["sub/info.nfo", "sub/keep.epub", "sub/skip.epub"])
+        with open(f"{self.ws.inbox}/Pack/sub/info.nfo", "rb") as f:
+            self.assertEqual(f.read(), b"notes")
+
+    def test_undo_after_the_holding_copy_expired_restores_the_rest(self):
+        res = self.apply(self.pack())
+        shutil.rmtree(f"{self.cfg['holding_dir']}/{res.op_id}")
+        _, errors = engine.undo_operation(res.op_id, self.cfg, self.db)
+        self.assertEqual(errors, [])
+        self.assertEqual(self.ws.tree(f"{self.ws.inbox}/Pack"), ["sub/keep.epub"])
+        self.assertEqual(self.db.operation(res.op_id)["status"], "undone")
+        self.assertIn("no longer held", self.db.operation(res.op_id)["message"])
+
+    def test_undo_refuses_if_a_held_files_old_place_is_taken(self):
+        res = self.apply(self.pack())
+        write_file(f"{self.ws.inbox}/Pack/sub/info.nfo", b"new")
+        with self.assertRaises(engine.PlanError):
+            engine.undo_operation(res.op_id, self.cfg, self.db)
+
+    def test_if_a_file_cannot_be_held_it_stays_where_it_was(self):
+        write_file(self.cfg["holding_dir"], b"a file, so no folder can go here")
+        res = self.apply(self.pack())
+        self.assertTrue(os.path.exists(f"{self.ws.inbox}/Pack/sub/info.nfo"))
+        self.assertTrue(any("info.nfo" in e for e in res.errors), res.errors)
+
+    def test_nothing_is_held_when_leftovers_are_kept(self):
+        res = self.apply(self.pack(), delete_leftovers=False)
+        self.assertEqual(res.held, 0)
+        self.assertFalse(os.path.exists(self.cfg["holding_dir"]))
+
+    def test_old_operations_expire_and_nothing_else_is_touched(self):
+        hold = self.cfg["holding_dir"]
+        old, recent, other = f"{hold}/3", f"{hold}/4", f"{hold}/my-notes"
+        for folder in (old, recent, other):
+            write_file(f"{folder}/x")
+        ancient = time.time() - 31 * 86400
+        for folder in (old, other):
+            os.utime(folder, (ancient, ancient))
+        engine.purge_held(self.cfg)
+        self.assertEqual(sorted(os.listdir(hold)), ["4", "my-notes"])
+
+    def test_importing_clears_expired_operations(self):
+        hold = self.cfg["holding_dir"]
+        write_file(f"{hold}/3/x")
+        os.utime(f"{hold}/3", (1, 1))
+        self.apply(self.pack())
+        self.assertFalse(os.path.exists(f"{hold}/3"))
+
+    def test_purging_with_no_holding_folder_is_fine(self):
+        engine.purge_held(self.cfg)
 
 
 class TestCalibreRules(unittest.TestCase):
@@ -396,7 +472,7 @@ class TestImport(Base):
         next(b for b in plan.books if b.info.title == "Skip").skip = True
         self.assertEqual(sorted(engine.files_to_delete(plan, self.cfg)), ["b.epub", "info.nfo"])
         res = self.apply(plan)
-        self.assertEqual(res.leftovers_deleted, 2)
+        self.assertEqual(res.held, 2)
         self.assertFalse(os.path.exists(f"{self.ws.inbox}/P"))
 
     def test_keep_leftovers_deletes_nothing(self):
@@ -423,7 +499,7 @@ class TestImport(Base):
         plan = self.plan(engine.source_for_path(other))
         self.assertEqual(engine.files_to_delete(plan, self.cfg), [])
         res = self.apply(plan)
-        self.assertEqual((res.imported, res.leftovers_deleted), (1, 0))
+        self.assertEqual((res.imported, res.held), (1, 0))
         self.assertEqual(self.ws.tree(other), ["photo.jpg", "tax-return.pdf.txt"])
         self.assertTrue(os.path.isdir(f"{other}/empty-but-not-ours"))
         self.assertFalse(os.path.exists(f"{other}/sub"))
