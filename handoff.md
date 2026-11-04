@@ -12,7 +12,7 @@ Read this first, then continue with "Next steps".
 - `kvctl`: **in progress**, Kavita CLI and book importer
 - `bookread`: terminal e-book reader
 
-Remote: `git@github.com:D0GU/kali-utils.git`. `main` holds the finished fixes (`b587a18`). kvctl work is on the local branch **`kvctl`**, not pushed. Run tests with `./run-tests.sh` or `./run-tests.sh tests/<tool>`. Launchers in `bin/` are linked into `~/.local/bin` by `install.sh`.
+Remote: `git@github.com:D0GU/kali-utils.git`. kvctl work was merged into `main` on 2026-11-04. Run tests with `./run-tests.sh` or `./run-tests.sh tests/<tool>`. Launchers in `bin/` are linked into `~/.local/bin` by `install.sh`.
 
 ## Current task: finish kvctl
 Kavita v0.9.1.4 is installed and set up by the user: `/opt/Kavita`, service `kavita`, port 5000, LAN-only, library root `/mnt/data/media/Books`.
@@ -25,7 +25,7 @@ Kavita v0.9.1.4 is installed and set up by the user: `/opt/Kavita`, service `kav
 - Authors: use "First Last". Merge duplicates only after showing a plan.
 - Curses UI in the same style as the other tools (the user's standing preference).
 
-**State (2026-11-04): built, tested and committed locally on branch `kvctl`, not pushed or merged.** Commit only when the user asks. `./run-tests.sh`: 597 pass (including bookread). `kvctl` is linked into `~/.local/bin`. The author merge, series grouping and Overlord renumbering were applied to the real library (see Next steps); nothing else there changed. `/mnt/data/kvctl` and `~/.config/kvctl` don't exist until `kvctl setup` runs.
+**State (2026-11-04): built, tested, pushed and merged to `main`, with the user's approval.** Commit or push only when the user asks. `./run-tests.sh`: 597 pass (including bookread). `kvctl` is linked into `~/.local/bin`. The author merge, series grouping and Overlord renumbering were applied to the real library (see Next steps); nothing else there changed. `/mnt/data/kvctl` and `~/.config/kvctl` don't exist until `kvctl setup` runs.
 
 - Added: `kvctl/cli.py`, `kvctl/tui.py`, `bin/kvctl`, `docs/kvctl.md`, `tests/kvctl/`, README and packaging entries. `Screen.run_task` and `Screen.show_text` now live in `kutil/tui.py`; plexsort and trctl use them.
 - Engine fixes beyond the plan: mixed torrents keep media and the torrent; a path named by hand keeps its other files; all-skipped plans are refused; sidecars only apply when a folder holds one book; undo checks everything before moving; symlinks ignored; ISBN and publisher no longer copied from Open Library (work-level results, arbitrary edition; it returned a Portuguese ISBN for Neuromancer). `ImportError_` is now `PlanError`.
@@ -45,7 +45,7 @@ All 10 findings from the suite review are fixed. Behaviour changes to remember:
 - A skipped duplicate in a format the library lacks stays in the source (`Book.new_formats`), and its torrent stays.
 - Shared in kutil: `media.py`, `text.clean_text`, `tui.set_locale`. `fmt.table` cleans every cell.
 
-plexsort has the same cleanup now, with `holding_dir` default `/mnt/data/plexsort-holding` and table `held`. GameCenter CX is done in code: files named `<torrent name> [Sxx] [-] CODE - Name` are extras of the show (`parse.CODED_SPECIAL_RE`). A dry run on the real names gave one show, 364 files, 364 unique destinations. The user hadn't yet re-run the real import.
+plexsort has the same cleanup now, with `holding_dir` default `/mnt/data/plexsort-holding` and table `held`. GameCenter CX is done in code: files named `<torrent name> [Sxx] [-] CODE - Name` are extras of the show (`parse.CODED_SPECIAL_RE`). The user imported it on 2026-11-04 as operation 16: 297 episodes and 67 specials, verified. Two files the torrent misnumbered were renamed with the user's approval: `s20e17 - F-Zero X` and `s06e08 - Bio Miracle Bokutte Upa`. 14 numbers stay shared on purpose (alternate cuts). How Plex shows it wasn't checked.
 
 Review findings left unfixed: trctl search/filter cursor crash in narrow windows, raw torrent names in direct prints, Files tab summary covering the last row, `[` in names treated as globs, `setup --password-stdin`; syswatch false FAILING from `when_failed: past`, de-escalation re-raising, live temperature in the alert signature, unvalidated config and state types, percent ignoring reserved blocks.
 
@@ -88,7 +88,6 @@ Folder title and author are cut at 36 characters, file-name title and author at 
 - Replies: plain and short, lead with the outcome. The user likes being asked about real design choices first.
 
 ## Other open items
-- **GameCenter CX** (torrent id 7) was 4.5% downloaded at last check. Don't touch it or add its rules until the user says it's finished. Layout decision: one show, regular episodes in seasons, coded specials (B, SP, NC, LE, YE, RE, ...) as extras. Generic fixes won't stop it splitting; it still needs fan-code rules.
 - `sudo bash ~/scripts/syswatch-enable-health.sh` should be re-run by the user to enable the full SMART report (`smartctl -j -x`).
 - SSD `sdb` shows 25 reallocated, 68 offline-uncorrectable and 18 uncorrectable by attribute names, but smartctl doesn't know this model, so it's unconfirmed. A long self-test was suggested. It holds `/` and Kavita's data.
 - Remote branch `fix-sorting-and-disk-polling` is merged and could be deleted if the user wants.
