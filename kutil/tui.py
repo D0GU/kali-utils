@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import curses
 import glob
+import locale
 import os
 import threading
 from dataclasses import dataclass, field
@@ -67,6 +68,17 @@ def put(win, y: int, x: int, text: str, attr: int = 0, width: int | None = None)
         win.addstr(y, x, text, attr)
     except curses.error:
         pass  # writing into the bottom-right cell raises after drawing
+
+
+def set_locale() -> None:
+    """Use the user's language for curses. SSH can pass on one this machine doesn't have, which isn't worth stopping for."""
+    try:
+        locale.setlocale(locale.LC_ALL, "")
+    except locale.Error:
+        try:
+            locale.setlocale(locale.LC_ALL, "C.UTF-8")
+        except locale.Error:
+            pass
 
 
 def set_cursor(visible: bool) -> None:

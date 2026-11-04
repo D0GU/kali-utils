@@ -8,13 +8,12 @@ from __future__ import annotations
 
 import copy
 import curses
-import locale
 import os
 import sqlite3
 import time
 
 from kutil import fmt
-from kutil.tui import Col, Field, Form, LineEdit, ListState, Screen, Theme, choose, pad, put, read_key, set_cursor
+from kutil.tui import Col, Field, Form, LineEdit, ListState, Screen, Theme, choose, pad, put, read_key, set_cursor, set_locale
 
 import bookread.config
 import bookread.reader
@@ -896,7 +895,7 @@ class App(Screen):
 
 def run(cfg: dict, db: DB, transmission, start_source: str | None = None, offline: bool = False) -> int:
     os.environ.setdefault("ESCDELAY", "25")
-    locale.setlocale(locale.LC_ALL, "")
+    set_locale()
 
     def main(scr):
         return App(scr, cfg, db, transmission, offline).run(start_source)

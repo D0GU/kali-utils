@@ -15,7 +15,6 @@ from __future__ import annotations
 import curses
 import dataclasses
 import fnmatch
-import locale
 import os
 import shutil
 import subprocess
@@ -25,7 +24,7 @@ from dataclasses import dataclass, field
 
 from kutil import fmt
 from kutil.tui import FAST_STEP, Col, Field, Form, FormError, LineEdit, ListState, Screen, Theme, choose, pad, put, \
-    read_key, set_cursor
+    read_key, set_cursor, set_locale
 
 from .cli import (INFO_FIELDS, LIST_FIELDS, SORT_KEYS, STATUS_FILTERS, CLIError, add_source,
                   info_fields, is_complete, status_label)
@@ -1159,5 +1158,5 @@ def run(settings, interval: float = 2.0, mouse: bool = True) -> int:
 
     make_client().session_get(["version"])  # fail fast, before taking over the terminal
     os.environ.setdefault("ESCDELAY", "25")
-    locale.setlocale(locale.LC_ALL, "")
+    set_locale()
     return curses.wrapper(lambda scr: App(scr, make_client(), make_client(), interval, mouse).run())

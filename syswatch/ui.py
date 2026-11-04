@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import curses
-import locale
 import os
 import time
 
 from kutil.fmt import bar, human_size as size, text_width as tw, truncate as trunc
-from kutil.tui import Theme, pad, put
+from kutil.tui import Theme, pad, put, set_locale
 
 from .alerts import LEVELS, AlertEngine
 from .collect import Collector, ProcessSampler
@@ -973,5 +972,5 @@ class App:
 
 def run(interval: float = 1.0) -> int:
     os.environ.setdefault("ESCDELAY", "25")
-    locale.setlocale(locale.LC_ALL, "")
+    set_locale()
     return curses.wrapper(lambda scr: App(scr, interval).run())

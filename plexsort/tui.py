@@ -9,13 +9,12 @@ anything is moved.
 from __future__ import annotations
 
 import curses
-import locale
 import os
 import time
 
 from kutil import fmt
 from kutil.tui import Col, Field, Form, FormError, LineEdit, ListState, Screen, Theme, choose, pad, put, read_key, \
-    set_cursor
+    set_cursor, set_locale
 
 from . import config, engine, naming
 from .folders_ui import FoldersDialog
@@ -1367,7 +1366,7 @@ class Review:
 def run(cfg: dict, db: DB, client, settings=None, start_source: str | None = None, offline: bool = False,
         setup_only: bool = False) -> int:
     os.environ.setdefault("ESCDELAY", "25")
-    locale.setlocale(locale.LC_ALL, "")
+    set_locale()
 
     def main(scr):
         app = App(scr, cfg, db, client, offline)

@@ -8,7 +8,6 @@ terminal's own zoom; the page lays itself out again when the window's size in ce
 from __future__ import annotations
 
 import curses
-import locale
 import os
 import sqlite3
 import threading
@@ -17,7 +16,7 @@ from dataclasses import dataclass
 from typing import NamedTuple
 
 from kutil import fmt
-from kutil.tui import Col, LineEdit, ListState, Screen, Theme, pad, put, read_key, set_cursor
+from kutil.tui import Col, LineEdit, ListState, Screen, Theme, pad, put, read_key, set_cursor, set_locale
 
 from . import ebook, library
 from .ebook import cell_width
@@ -703,13 +702,7 @@ class Menu(Screen):
 def run(store, folder: str, query: str = "", path: str | None = None, title: str = "") -> str | None:
     """The menu of books, or straight into the file at `path`. Returns a problem to report once the terminal is back."""
     os.environ.setdefault("ESCDELAY", "25")
-    try:
-        locale.setlocale(locale.LC_ALL, "")
-    except locale.Error:        # SSH can pass on a language this machine doesn't have
-        try:
-            locale.setlocale(locale.LC_ALL, "C.UTF-8")
-        except locale.Error:
-            pass
+    set_locale()
 
     def main(scr):
         menu = Menu(scr, store, folder, query)
