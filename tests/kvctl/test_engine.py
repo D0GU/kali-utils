@@ -10,7 +10,7 @@ import xml.etree.ElementTree as ET
 import zipfile
 from unittest import mock
 
-from kvctl import calibre, engine, epub
+from kvctl import calibre, engine, epub, metadata
 from kvctl.calibre import BookInfo, read_opf
 from kvctl.db import DB
 from kvctl.metadata import read_book
@@ -291,6 +291,10 @@ class TestBooksWithNoId(Base):
 
 class TestUntrustedNames(Base):
     """Finding 9: control characters in names would reach the terminal and make metadata.opf unreadable."""
+
+    def test_metadata_values_are_cleaned(self):
+        # EPUB can't hold these, being XML, but a MOBI's title and author are raw bytes
+        self.assertEqual(metadata._clean(" a\x1b[31m  b\x07 "), "a[31m b")
 
     def test_they_never_reach_the_metadata(self):
         info = read_book(make_epub(f"{self.ws.root}/Evil\x1b[31m\x07 Book - Ann\x1b Lee.epub", ""))[0]
