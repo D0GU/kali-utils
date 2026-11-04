@@ -493,7 +493,7 @@ def cmd_setup(args, cfg, db) -> int:
     client = Kavita(url, key)
     libs = client.libraries()     # a bad key or address stops here, before anything is saved
     print(paint(f"✓ Connected: {len(libs)} librar{'y' if len(libs) == 1 else 'ies'}", "green"))
-    cfg["url"], cfg["api_key"] = url, key
+    cfg["url"], cfg["api_key"], cfg["_overrides"] = url, key, {}     # entered here on purpose, so it's saved whatever was overriding it
     path = config.save(cfg)
     print(f"Saved {path} (only you can read it)")
     for d in cfg["inbox_dirs"]:
@@ -667,7 +667,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         cfg = config.load()
         if args.url:
-            cfg["url"] = args.url
+            config.override(cfg, "url", args.url)
         args.offline = args.offline or not cfg["online"]
         db = DB(cfg["database"])
         return args.func(args, cfg, db) or 0

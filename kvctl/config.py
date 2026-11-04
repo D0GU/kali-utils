@@ -32,16 +32,23 @@ def config_path() -> Path:
     return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "kvctl" / "config.toml"
 
 
+def override(cfg: dict, key: str, value) -> None:
+    """Use a value for this run only: `save` keeps what's stored unless the setting has since been changed."""
+    cfg[key] = value
+    cfg.setdefault("_overrides", {})[key] = value
+
+
 def load() -> dict:
     cfg = {k: (list(v) if isinstance(v, list) else v) for k, v in DEFAULTS.items()}
     path = config_path()
     if path.exists():
         with path.open("rb") as f:
             cfg.update(tomllib.load(f))
+    cfg["_overrides"] = {}
     if os.environ.get("KVCTL_API_KEY"):
-        cfg["api_key"] = os.environ["KVCTL_API_KEY"]
+        override(cfg, "api_key", os.environ["KVCTL_API_KEY"])
     if os.environ.get("KVCTL_URL"):
-        cfg["url"] = os.environ["KVCTL_URL"]
+        override(cfg, "url", os.environ["KVCTL_URL"])
     cfg["inbox_dirs"] = [os.path.abspath(os.path.expanduser(d)) for d in cfg["inbox_dirs"]]
     cfg["books_dir"] = os.path.abspath(os.path.expanduser(cfg["books_dir"]))
     cfg["holding_dir"] = os.path.abspath(os.path.expanduser(cfg["holding_dir"]))
@@ -67,8 +74,8 @@ def save(cfg: dict) -> Path:
         with path.open("rb") as f:
             stored = tomllib.load(f)
     cfg = dict(cfg)
-    for key, env in (("api_key", "KVCTL_API_KEY"), ("url", "KVCTL_URL")):   # environment overrides stay out of the file
-        if os.environ.get(env) and cfg.get(key) == os.environ[env]:
+    for key, value in cfg.get("_overrides", {}).items():
+        if cfg.get(key) == value:
             cfg[key] = stored.get(key, DEFAULTS[key])
     lines = ["# kvctl configuration - edit with `kvctl setup`, `kvctl config` or Settings in the UI", ""]
     lines += [f"{k} = {_toml(cfg.get(k, d))}" for k, d in DEFAULTS.items()]
