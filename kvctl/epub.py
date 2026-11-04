@@ -17,7 +17,7 @@ import shutil
 import xml.etree.ElementTree as ET
 import zipfile
 
-from .metadata import MAX_XML
+from .metadata import MAX_XML, ZIP_ERRORS
 
 MAX_TOTAL = 4 * 1024 ** 3   # uncompressed; anything bigger isn't a book we should unpack on a guess
 # Kavita's list of roles that mean "wrote it"
@@ -223,7 +223,7 @@ def read_package(path: str) -> str:
             if info.file_size > MAX_XML:
                 raise EpubError("package document is too large")
             return z.read(name).decode("utf-8")
-    except (OSError, zipfile.BadZipFile, ET.ParseError, KeyError, UnicodeDecodeError, RuntimeError, NotImplementedError) as e:
+    except (OSError, *ZIP_ERRORS, ET.ParseError, KeyError) as e:
         raise EpubError(f"can't read {os.path.basename(path)}: {e}") from None
 
 
@@ -268,7 +268,7 @@ def _rewrite(path: str, text: str) -> None:
         with open(tmp, "rb") as f:
             os.fsync(f.fileno())
         os.replace(tmp, path)
-    except (OSError, zipfile.BadZipFile, ET.ParseError, KeyError, RuntimeError, NotImplementedError) as e:
+    except (OSError, *ZIP_ERRORS, ET.ParseError, KeyError) as e:
         raise EpubError(f"can't rewrite {os.path.basename(path)}: {e}") from None
     finally:
         if os.path.exists(tmp):

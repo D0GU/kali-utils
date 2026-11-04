@@ -43,6 +43,152 @@ class Base(unittest.TestCase):
         return next(s for s in sources if s.kind == "torrent"), tr
 
 
+def damage_member(path: str, member: str) -> None:
+    """Recompress the zip and scramble one member's deflate stream, as a bad download or disk would."""
+    with zipfile.ZipFile(path) as old:
+        items = [(i.filename, old.read(i)) for i in old.infolist()]
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as new:
+        for name, data in items:
+            new.writestr(name, data * 50 if name == member else data)
+    with zipfile.ZipFile(path) as z:
+        info = z.getinfo(member)
+    with open(path, "r+b") as f:
+        f.seek(info.header_offset + 30 + len(info.filename))
+        f.write(b"\xff" * min(20, info.compress_size))
+
+
+class TestNothingUnknownIsDeleted(Base):
+    """Finding 1: only files known to be junk may go."""
+
+    def test_file_types_the_importer_has_never_heard_of_stop_the_cleanup(self):
+        for name in ("audiobook.m4b", "show.webm", "comic.cbz", "extras.zip", "track.wma", "video.ts", "NOEXTENSION", "data.xyz"):
+            with self.subTest(name):
+                folder = f"{self.ws.downloads}/{name}-pack"
+                make_epub(f"{folder}/book.epub", f"Book {name}")
+                write_file(f"{folder}/{name}", b"valuable")
+                write_file(f"{folder}/site.url")
+                tr = FakeTransmission([torrent_dict(7, f"{name}-pack", self.ws.downloads)])
+                sources, _ = engine.list_sources(self.cfg, tr)
+                source = next(s for s in sources if s.kind == "torrent")
+                plan = self.plan(source)
+                self.assertEqual(engine.other_media(plan), [name])
+                self.assertEqual(engine.files_to_delete(plan, self.cfg), [])
+                self.assertFalse(engine.will_remove_torrent(plan, self.cfg))
+                self.apply(plan, transmission=tr)
+                self.assertTrue(os.path.exists(f"{folder}/{name}"))
+
+    def test_known_junk_is_still_cleaned_up(self):
+        for name in ("info.nfo", "site.url", "readme.txt", "Cover.JPG", "page.html", "x.sfv", "x.md5", "a.torrent", "Thumbs.db", "desktop.ini", ".DS_Store"):
+            write_file(f"{self.ws.inbox}/Pack/{name}")
+        make_epub(f"{self.ws.inbox}/Pack/book.epub", "Junk Book")
+        plan = self.plan(self.folder_source("Pack"))
+        self.assertEqual(engine.other_media(plan), [])
+        self.assertEqual(len(engine.files_to_delete(plan, self.cfg)), 11)
+
+
+class TestSkippedDuplicates(Base):
+    """Finding 2: 'already in the library' only counts if the library has that format."""
+
+    def owned_as_pdf(self, title="Dune"):
+        folder = self.ws.add_library_book(title, "Seth Ring", 5)
+        os.rename(f"{folder}/{title} - Seth Ring.epub", f"{folder}/{title} - Seth Ring.pdf")
+
+    def test_a_format_the_library_lacks_is_kept(self):
+        self.owned_as_pdf()
+        make_epub(f"{self.ws.inbox}/Pack/Dune.epub", "Dune")
+        make_epub(f"{self.ws.inbox}/Pack/New.epub", "New")
+        plan = self.plan(self.folder_source("Pack"))
+        dune = next(b for b in plan.books if b.info.title == "Dune")
+        self.assertTrue(dune.skip)
+        self.assertEqual(dune.new_formats, [".epub"])
+        self.assertIn("epub", dune.warning)
+        self.assertEqual(engine.files_to_delete(plan, self.cfg), [])
+        self.apply(plan)
+        self.assertTrue(os.path.exists(f"{self.ws.inbox}/Pack/Dune.epub"))
+
+    def test_a_torrent_holding_a_new_format_is_kept(self):
+        self.owned_as_pdf()
+        make_epub(f"{self.ws.downloads}/T/Dune.epub", "Dune")
+        make_epub(f"{self.ws.downloads}/T/New.epub", "New")
+        source, tr = self.torrent_source("T")
+        plan = self.plan(source)
+        self.assertFalse(engine.will_remove_torrent(plan, self.cfg))
+        self.assertFalse(self.apply(plan, transmission=tr).torrent_removed)
+
+    def test_a_format_already_owned_still_goes(self):
+        self.ws.add_library_book("Dune", "Seth Ring", 5)
+        make_epub(f"{self.ws.inbox}/Pack/Dune.epub", "Dune")
+        make_epub(f"{self.ws.inbox}/Pack/New.epub", "New")
+        plan = self.plan(self.folder_source("Pack"))
+        self.assertEqual(engine.files_to_delete(plan, self.cfg), ["Dune.epub"])
+
+    def test_a_book_you_skip_that_is_not_in_the_library_still_goes(self):
+        make_epub(f"{self.ws.inbox}/Pack/Skip.epub", "Skip")
+        make_epub(f"{self.ws.inbox}/Pack/New.epub", "New")
+        plan = self.plan(self.folder_source("Pack"))
+        next(b for b in plan.books if b.info.title == "Skip").skip = True
+        engine.check_plan(plan, self.cfg, self.db)
+        self.assertEqual(engine.files_to_delete(plan, self.cfg), ["Skip.epub"])
+
+    def test_importing_the_copy_after_all_clears_the_note(self):
+        self.owned_as_pdf()
+        make_epub(f"{self.ws.inbox}/Pack/Dune.epub", "Dune")
+        plan = self.plan(self.folder_source("Pack"))
+        plan.books[0].skip = False
+        engine.check_plan(plan, self.cfg, self.db)
+        self.assertEqual(plan.books[0].new_formats, [])
+
+
+class TestDamagedBooks(Base):
+    """Finding 3: a corrupt zip stream must stay one book's problem."""
+
+    OPF = "OEBPS/content.opf"
+    CHAPTER = "OEBPS/text.xhtml"
+
+    def test_reading_metadata_falls_back_to_the_file_name(self):
+        path = make_epub(f"{self.ws.root}/Dune - Ann Lee.epub", "Dune")
+        damage_member(path, self.OPF)
+        info, _, _, source = read_book(path)
+        self.assertEqual(info.title, "Dune")
+        self.assertIn("unreadable", source)
+
+    def test_reading_authors_is_a_book_error(self):
+        path = make_epub(f"{self.ws.root}/x.epub", "X")
+        damage_member(path, self.OPF)
+        with self.assertRaises(epub.EpubError):
+            epub.read_authors(path)
+
+    def test_rewriting_a_book_with_a_bad_chapter_leaves_it_alone(self):
+        path = make_epub(f"{self.ws.root}/x.epub", "X")
+        damage_member(path, self.CHAPTER)
+        with open(path, "rb") as f:
+            before = f.read()
+        with self.assertRaises(epub.EpubError):
+            epub.write_metadata(path, authors=["New Name"])
+        with open(path, "rb") as f:
+            self.assertEqual(f.read(), before)
+        self.assertEqual(os.listdir(self.ws.root).count("x.epub.kvctl-tmp"), 0)
+
+    def test_importing_it_finishes_and_says_so(self):
+        path = make_epub(f"{self.ws.downloads}/T/Bad.epub", "Bad Book", ["Ring, Seth"])
+        damage_member(path, self.CHAPTER)
+        write_file(f"{self.ws.downloads}/T/site.url")
+        source, tr = self.torrent_source("T")
+        res = self.apply(self.plan(source), transmission=tr)
+        self.assertEqual(res.imported, 1)
+        self.assertTrue(any("not changed" in e for e in res.errors), res.errors)
+        self.assertEqual(self.db.operation(res.op_id)["status"], "applied")
+        self.assertTrue(res.torrent_removed)
+
+    def test_a_damaged_library_book_does_not_stop_other_imports(self):
+        folder = self.ws.add_library_book("Old Bad", "Ann Lee", 5)
+        damage_member(f"{folder}/Old Bad - Ann Lee.epub", self.OPF)
+        make_epub(f"{self.ws.inbox}/Pack/New.epub", "New")
+        res = self.apply(self.plan(self.folder_source("Pack")))
+        self.assertEqual((res.imported, res.errors), (1, []))
+        self.assertEqual(self.db.operation(res.op_id)["status"], "applied")
+
+
 class TestCalibreRules(unittest.TestCase):
     def test_paths_match_calibre(self):
         self.assertEqual(calibre.book_path("Germination: Battle Mage Farmer", "Ring, Seth", 29),

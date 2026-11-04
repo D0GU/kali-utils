@@ -3,18 +3,22 @@ and nothing in them is executed; a damaged file just gives less metadata."""
 
 from __future__ import annotations
 
+import lzma
 import os
 import posixpath
 import re
 import struct
 import xml.etree.ElementTree as ET
 import zipfile
+import zlib
 
 from .calibre import BookInfo
 
 BOOK_EXT = {".epub", ".kepub", ".mobi", ".azw", ".azw3", ".fb2", ".pdf", ".lit", ".djvu", ".txt.zip", ".fb2.zip"}
 PRIMARY_EXT = BOOK_EXT - {".txt.zip"}
 MAX_XML = 4 * 1024 * 1024
+# How a damaged zip can fail while being read, beyond what zipfile wraps in BadZipFile.
+ZIP_ERRORS = (zipfile.BadZipFile, zlib.error, lzma.LZMAError, EOFError, RuntimeError, NotImplementedError, UnicodeDecodeError)
 MAX_COVER = 30 * 1024 * 1024
 
 
@@ -218,8 +222,7 @@ def read_book(path: str) -> tuple[BookInfo, bytes | None, str, str]:
             info, cover, cover_ext = reader(path)
             if info.title:
                 source = "book metadata"
-        except (OSError, zipfile.BadZipFile, ET.ParseError, KeyError, StopIteration, struct.error, ValueError,
-                IndexError, RuntimeError, NotImplementedError):
+        except (OSError, *ZIP_ERRORS, ET.ParseError, KeyError, StopIteration, struct.error, ValueError, IndexError):
             source = "file name (book metadata unreadable)"
     fallback = from_filename(path)
     if not info.title or info.title.lower() in ("unknown", "untitled"):
