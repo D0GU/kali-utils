@@ -11,7 +11,6 @@ from __future__ import annotations
 import curses
 import locale
 import os
-import threading
 import time
 
 from kutil import fmt
@@ -27,7 +26,6 @@ from .providers import Match, Matcher, apply_match, similarity
 TABS = ["Inbox", "Library", "History"]
 LIB_FILTERS = ["all", "movie", "show", "music"]
 LIB_NAMES = {"all": "All", "movie": "Movies", "show": "TV shows", "music": "Music"}
-SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 HELP = """\
 EVERYWHERE
@@ -121,46 +119,9 @@ class App(Screen):
         attr = {"ok": self.theme("green"), "error": self.theme("alert"), "info": self.theme("cyan")}[kind]
         self.message = (text, attr, time.monotonic() + (10 if kind == "error" else 5))
 
-    # -- background tasks with a progress box ----------------------------------------
-
-    def run_task(self, title: str, fn):
-        state = {"log": [], "done": False, "result": None, "error": None}
-
-        def log(msg: str) -> None:
-            state["log"].append(msg)
-
-        def worker():
-            try:
-                state["result"] = fn(log)
-            except Exception as e:  # surfaced to the caller below
-                state["error"] = e
-            finally:
-                state["done"] = True
-
-        threading.Thread(target=worker, daemon=True).start()
-        n = 0
-        while not state["done"]:
-            self.draw(skip_db=True)
-            h, w = self.scr.getmaxyx()
-            lines = state["log"][-8:]
-            width = min(w - 4, 90)
-            height = len(lines) + 5
-            y0, x0 = max(0, (h - height) // 2), max(0, (w - width) // 2)
-            self.box(y0, x0, height, width, title, self.theme("cyan"))
-            put(self.scr, y0 + 2, x0 + 3, f"{SPINNER[n % len(SPINNER)]} working…", self.theme("bold"))
-            for i, line in enumerate(lines):
-                put(self.scr, y0 + 3 + i, x0 + 3, line, self.theme("dim"), width=width - 6)
-            set_cursor(False)
-            self.scr.refresh()
-            read_key(self.scr)
-            n += 1
-        if state["error"]:
-            raise state["error"]
-        return state["result"]
-
     # -- drawing -------------------------------------------------------------------
 
-    def draw(self, skip_db: bool = False) -> None:
+    def draw(self) -> None:
         scr = self.scr
         scr.erase()
         h, w = scr.getmaxyx()
@@ -435,28 +396,7 @@ class App(Screen):
         return False
 
     def show_help(self) -> None:
-        lines = HELP.split("\n")
-        top = 0
-        while True:
-            self.draw()
-            h, w = self.scr.getmaxyx()
-            height = min(h - 2, len(lines) + 4)
-            width = min(w - 2, max(fmt.text_width(l) for l in lines) + 6)
-            y0, x0 = max(0, (h - height) // 2), max(0, (w - width) // 2)
-            self.box(y0, x0, height, width, "Keys - ↑↓ scroll, any other key closes", self.theme("cyan"))
-            view = height - 4
-            top = max(0, min(top, len(lines) - view))
-            for i, line in enumerate(lines[top:top + view]):
-                attr = self.theme("bold", "cyan") if line and not line.startswith(" ") else 0
-                put(self.scr, y0 + 2 + i, x0 + 3, line, attr, width=width - 5)
-            self.scr.refresh()
-            key = read_key(self.scr)
-            if key in (None, "RESIZE"):
-                continue
-            if key in ("UP", "k", "DOWN", "j"):
-                top += 1 if key in ("DOWN", "j") else -1
-            else:
-                return
+        self.show_text(HELP)
 
     # -- inbox ---------------------------------------------------------------------------
 

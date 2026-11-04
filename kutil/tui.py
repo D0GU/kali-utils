@@ -5,6 +5,7 @@ from __future__ import annotations
 import curses
 import glob
 import os
+import threading
 from dataclasses import dataclass, field
 
 from . import fmt
@@ -23,6 +24,7 @@ KEYMAP = {
 # terminfo names some terminals use for Shift+arrows instead of KEY_SR/KEY_SF
 SHIFT_NAMES = {b"kUP": "S-UP", b"kDN": "S-DOWN", b"KEY_SR": "S-UP", b"KEY_SF": "S-DOWN"}
 FAST_STEP = 5  # rows moved by Shift+Up/Down (or K/J)
+SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 CHARMAP = {"\n": "ENTER", "\r": "ENTER", "\t": "TAB", "\x1b": "ESC", "\x7f": "BACKSPACE",
            "\b": "BACKSPACE"}
 
@@ -471,6 +473,65 @@ class Screen:
 
     def draw(self) -> None:
         raise NotImplementedError
+
+    def run_task(self, title: str, fn):
+        """Run fn(log) on a worker thread behind a progress box. Its exception is re-raised here."""
+        state = {"log": [], "done": False, "result": None, "error": None}
+
+        def worker():
+            try:
+                state["result"] = fn(state["log"].append)
+            except Exception as e:
+                state["error"] = e
+            finally:
+                state["done"] = True
+
+        threading.Thread(target=worker, daemon=True).start()
+        n = 0
+        while not state["done"]:
+            self.draw()
+            h, w = self.scr.getmaxyx()
+            lines = state["log"][-8:]
+            width = min(w - 4, 90)
+            height = len(lines) + 5
+            y0, x0 = max(0, (h - height) // 2), max(0, (w - width) // 2)
+            self.box(y0, x0, height, width, title, self.theme("cyan"))
+            put(self.scr, y0 + 2, x0 + 3, f"{SPINNER[n % len(SPINNER)]} working…", self.theme("bold"))
+            for i, line in enumerate(lines):
+                put(self.scr, y0 + 3 + i, x0 + 3, line, self.theme("dim"), width=width - 6)
+            set_cursor(False)
+            self.scr.refresh()
+            read_key(self.scr)
+            n += 1
+        if state["error"]:
+            raise state["error"]
+        return state["result"]
+
+    def show_text(self, text: str, title: str = "Keys - ↑↓ scroll, any other key closes"):
+        """A scrolling box. Returns the key that closed it, so a caller can offer a choice in the title."""
+        lines = text.split("\n")
+        top = 0
+        moves = {"UP": -1, "k": -1, "DOWN": 1, "j": 1, "PGUP": -10, "PGDN": 10, "HOME": -10 ** 6, "END": 10 ** 6}
+        while True:
+            self.draw()
+            h, w = self.scr.getmaxyx()
+            height = min(h - 2, len(lines) + 4)
+            width = min(w - 2, max(fmt.text_width(title) + 8, *(fmt.text_width(l) + 6 for l in lines)))
+            y0, x0 = max(0, (h - height) // 2), max(0, (w - width) // 2)
+            self.box(y0, x0, height, width, title, self.theme("cyan"))
+            view = height - 4
+            top = max(0, min(top, len(lines) - view))
+            for i, line in enumerate(lines[top:top + view]):
+                attr = self.theme("bold", "cyan") if line and not line.startswith(" ") else 0
+                put(self.scr, y0 + 2 + i, x0 + 3, line, attr, width=width - 5)
+            self.scr.refresh()
+            key = read_key(self.scr)
+            if key in (None, "RESIZE"):
+                continue
+            if key in moves:
+                top += moves[key]
+            else:
+                return key
 
     def box(self, y: int, x: int, h: int, w: int, title: str, attr: int) -> None:
         scr = self.scr

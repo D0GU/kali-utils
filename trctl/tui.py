@@ -775,32 +775,7 @@ class App(Screen):
         self.poller.detail_id = None
 
     def show_help(self) -> None:
-        lines = HELP.split("\n")
-        top = 0
-        while True:
-            self.draw()
-            h, w = self.scr.getmaxyx()
-            height = min(h - 2, len(lines) + 4)
-            width = min(w - 2, max(fmt.text_width(l) for l in lines) + 6)
-            y0, x0 = max(0, (h - height) // 2), max(0, (w - width) // 2)
-            self.box(y0, x0, height, width, "Keys - ↑↓ scroll, any other key closes", self.theme("cyan"))
-            view = height - 4
-            top = max(0, min(top, len(lines) - view))
-            for i, line in enumerate(lines[top:top + view]):
-                attr = self.theme("bold", "cyan") if line and not line.startswith(" ") else 0
-                put(self.scr, y0 + 2 + i, x0 + 3, line, attr, width=width - 5)
-            self.scr.refresh()
-            key = read_key(self.scr)
-            if key in (None, "RESIZE"):
-                continue
-            if key in ("UP", "k"):
-                top -= 1
-            elif key in ("DOWN", "j"):
-                top += 1
-            elif key in ("PGUP", "PGDN"):
-                top += view if key == "PGDN" else -view
-            else:
-                return
+        self.show_text(HELP)
 
     # -- torrent actions ------------------------------------------------------------
 
