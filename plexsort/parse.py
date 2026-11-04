@@ -33,7 +33,9 @@ YEAR_RE = re.compile(r"(?<!\d)(19[2-9]\d|20[0-4]\d)(?!\d|p\b)")
 YEAR_RANGE_RE = re.compile(r"(?<!\d)(19[2-9]\d|20[0-4]\d)\s*[-–~]\s*(19[2-9]\d|20[0-4]\d)(?!\d)")
 SXXEYY_RE = re.compile(r"(?i)(?<![a-z0-9])s(\d{1,2})[ ._-]*e(\d{1,4})(?:[ ._-]*(?:-|e|-e)[ ._-]*(\d{1,4}))?(?![0-9])")
 NXNN_RE = re.compile(r"(?i)(?<![a-z0-9])(\d{1,2})x(\d{2,3})(?![0-9a-z])")
-EPWORD_RE = re.compile(r"(?i)(?<![a-z])(?:ep(?:isode)?\.?[ ._-]*|e)(\d{1,4})(?:\s*[-~]\s*(\d{1,4}))?(?![0-9])")
+# A release's checksum, such as [732E889F]. It's hex, so it can look like E889 or S2.
+CHECKSUM_RE = re.compile(r"\s*[\[(][0-9A-Fa-f]{8}[\])]")
+EPWORD_RE = re.compile(r"(?i)(?<![a-z0-9])(?:ep(?:isode)?\.?[ ._-]*|e)(\d{1,4})(?:\s*[-~]\s*(\d{1,4}))?(?![0-9])")
 ANIME_DASH_RE = re.compile(r"(?:^|\s)-\s+(\d{1,4})(?:v\d)?(?=\s|$|\[|\()")
 LEADING_NUM_RE = re.compile(r"^(\d{1,4})(?:v\d)?(?:\s*[-.]\s+|\s+|$)")
 SEASON_RE = re.compile(r"(?i)(?<![a-z])(?:season|staffel|saison|temporada)[ ._-]*(\d{1,2})(?!\d)|"
@@ -327,12 +329,16 @@ def _dir_year(dirs: list[str], skip_seasons: bool = False) -> int | None:
 CODED_SPECIAL_RE = re.compile(r"(?:S\d{1,2}\s*-\s*)?((?:[A-Z]\d+[A-Z0-9]*|[A-Z]{2,6}\d*[A-Z0-9]*)(?:-\d+)?\s*-\s*\S.*)")
 
 
+BARE_SPECIAL_RE = re.compile(r"S\d{1,2}")
+
+
 def _after_root(tagless: str, root_name: str) -> str:
     """What follows the torrent's own name at the start of a file name, or "" if it doesn't start that way."""
-    root = despace(strip_tags(root_name))
-    if not root or not tagless.casefold().startswith(root.casefold() + " "):
-        return ""
-    return tagless[len(root):].strip(" -_.")
+    # the name as written, or without release tags: '[RH] Show [BDRip] [1080p]' names files 'Show - 01'
+    for root in (despace(strip_tags(root_name)), clean_title(root_name, recase=False)[0]):
+        if root and tagless.casefold().startswith(root.casefold() + " "):
+            return tagless[len(root):].strip(" -_.")
+    return ""
 
 
 def _extra_of_root(item: Item, name: str, extra_type: str, root_name: str, note: str) -> Item:
@@ -348,7 +354,7 @@ def classify_video(rel: str, size: int, root_name: str, siblings: dict[str, list
     stem = os.path.splitext(fname)[0]
     dirs = parts[:-1]
     item = Item(src=rel, size=size)
-    tagless = despace(strip_tags(stem))
+    tagless = despace(strip_tags(CHECKSUM_RE.sub("", stem)))
     dir_names = [strip_numbering(despace(strip_tags(d))) for d in dirs]
     item.anime = bool(ANIME_HINT_RE.search(stem) or ANIME_HINT_RE.search(root_name)
                       or any(ANIME_HINT_RE.search(d) for d in dirs))
@@ -362,6 +368,8 @@ def classify_video(rel: str, size: int, root_name: str, siblings: dict[str, list
     after_root = _after_root(tagless, root_name)
     if after_root and not SXXEYY_RE.search(tagless) and (m := CODED_SPECIAL_RE.fullmatch(after_root)):
         return _extra_of_root(item, m.group(1), "other", root_name, "coded special")
+    if after_root and BARE_SPECIAL_RE.fullmatch(after_root):   # 'Show - S1': no way to tell which special it is online
+        return _extra_of_root(item, after_root, "other", root_name, "coded special")
 
     # 3. markers from the innermost folder outwards, then the file name itself
     marker = None

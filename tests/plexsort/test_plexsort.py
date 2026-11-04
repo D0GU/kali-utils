@@ -437,6 +437,62 @@ class TestTUISmoke(EngineCase):
         self.keys("q")
 
 
+class TestChecksumsInNames(unittest.TestCase):
+    """A release's '[732E889F]' checksum is hex, so it can hold 'E889', which isn't episode 889. Names are from a real torrent."""
+
+    ROOT = "[RH] Danshi Koukousei no Nichijou [BDRip] [Hi10] [1080p]"
+    SHOW = "Danshi Koukousei no Nichijou"
+
+    def item(self, tail):
+        return build_items(self.ROOT, [(f"[RH] {self.SHOW} - {tail}.mkv", 500_000_000)])[0][0]
+
+    def test_the_episode_number_is_never_read_from_a_checksum(self):
+        table = {"01 [1396D8EA]": 1, "03 [732E889F]": 3, "04 [0C940839]": 4, "05 [E4502BC2]": 5, "08 [70E2F617]": 8, "12 [D4351377]": 12}
+        for tail, episode in table.items():
+            with self.subTest(tail):
+                it = self.item(tail)
+                self.assertEqual((it.kind, it.title, it.season, it.episode, it.ep_title), ("episode", self.SHOW, 1, episode, ""))
+
+    def test_other_checksum_forms(self):
+        for name, episode in (("Show - 03 (732E889F).mkv", 3), ("Show.E05.[70E2F617].mkv", 5), ("Show S01E06 [E4502BC2].mkv", 6)):
+            with self.subTest(name):
+                self.assertEqual(build_items("Show", [(name, 500_000_000)])[0][0].episode, episode)
+
+    def test_a_number_glued_to_other_characters_is_not_an_episode(self):
+        self.assertEqual(build_items("Pack", [("Some Film ab12E45.mkv", 500_000_000)])[0][0].kind, "movie")
+
+    def test_an_episode_word_is_still_an_episode(self):
+        for name in ("Show E07.mkv", "Show Ep 07.mkv", "Show - Episode 7.mkv"):
+            with self.subTest(name):
+                self.assertEqual(build_items("Pack", [(name, 500_000_000)])[0][0].episode, 7)
+
+    def test_short_specials_are_extras_of_the_show(self):
+        for tail, name in (("S1 [23C2AFFF]", "S1"), ("S2 [3395E4AE]", "S2"), ("S4 [C67B1E0D]", "S4"), ("S5 [77A53E65]", "S5"), ("S7 [0348AD6E]", "S7")):
+            with self.subTest(tail):
+                it = self.item(tail)
+                self.assertEqual((it.kind, it.category, it.title, it.extra_name, it.season, it.episode),
+                                 ("extra", "show", self.SHOW, name, None, None))
+
+    def test_creditless_videos_lose_the_show_name(self):
+        for tail, name in (("NCED [1014B25C]", "NCED"), ("NCOP1 [8B38F694]", "NCOP1")):
+            with self.subTest(tail):
+                it = self.item(tail)
+                self.assertEqual((it.kind, it.title, it.extra_name), ("extra", self.SHOW, name))
+
+    def test_a_season_in_a_real_episode_name_still_counts(self):
+        it = build_items("Show", [("Show S02E03 [70E2F617].mkv", 500_000_000)])[0][0]
+        self.assertEqual((it.season, it.episode), (2, 3))
+
+    def test_the_whole_torrent_is_one_show(self):
+        names = [f"[RH] {self.SHOW} - {n:02d} [{h}].mkv" for n, h in enumerate(
+            ["1396D8EA", "6281C9C0", "732E889F", "0C940839", "E4502BC2", "C0AA3474", "DB03B011", "70E2F617"], start=1)]
+        names += [f"[RH] {self.SHOW} - S{n} [{h}].mkv" for n, h in enumerate(["23C2AFFF", "3395E4AE", "AA9C3B74"], start=1)]
+        names += [f"[RH] {self.SHOW} - NCOP1 [8B38F694].mkv"]
+        plan = Plan(self.ROOT, "/x", *build_items(self.ROOT, [(n, 500_000_000) for n in names])[:2])
+        self.assertEqual([(g.category, g.title, len(g.items)) for g in plan.groups()], [("show", self.SHOW, 12)])
+        self.assertEqual(sorted(i.episode for i in plan.items if i.kind == "episode"), list(range(1, 9)))
+
+
 class TestCodedSpecials(unittest.TestCase):
     """A fan collection (GameCenter CX): one show, with specials coded B8, NC11, SP1... The names are the torrent's own."""
 

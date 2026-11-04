@@ -47,6 +47,8 @@ All 10 findings from the suite review are fixed. Behaviour changes to remember:
 
 plexsort has the same cleanup now, with `holding_dir` default `/mnt/data/plexsort-holding` and table `held`. GameCenter CX is done in code: files named `<torrent name> [Sxx] [-] CODE - Name` are extras of the show (`parse.CODED_SPECIAL_RE`). The user imported it on 2026-11-04 as operation 16: 297 episodes and 67 specials, verified. Two files the torrent misnumbered were renamed with the user's approval: `s20e17 - F-Zero X` and `s06e08 - Bio Miracle Bokutte Upa`. 14 numbers stay shared on purpose (alternate cuts). How Plex shows it wasn't checked.
 
+plexsort ignores release checksums such as `[732E889F]` when reading numbers (they read as E889), and a bare `Show - S1` file is an extra, since online specials have no numbers to match. Daily Lives of High School Boys imported and verified this way.
+
 Review findings left unfixed: trctl search/filter cursor crash in narrow windows, raw torrent names in direct prints, Files tab summary covering the last row, `[` in names treated as globs, `setup --password-stdin`; syswatch false FAILING from `when_failed: past`, de-escalation re-raising, live temperature in the alert signature, unvalidated config and state types, percent ignoring reserved blocks.
 
 ## Next steps
