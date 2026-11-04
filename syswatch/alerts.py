@@ -86,7 +86,9 @@ class Condition:
 
 
 def _ident(disk: dict) -> str:
-    return disk.get("serial") or disk.get("model") or disk["name"]
+    if disk.get("serial"):
+        return disk["serial"]
+    return f"{disk['model']}:{disk['name']}" if disk.get("model") else disk["name"]   # two drives can share a model
 
 
 class AlertEngine:
@@ -123,13 +125,19 @@ class AlertEngine:
     def save(self) -> None:
         if not self.persist:
             return
-        os.makedirs(os.path.dirname(self.path), exist_ok=True)
         data = {"history": [asdict(a) for a in self.history[:200]], "acked": self.acked, "smart": self.smart_seen,
                 "events": [asdict(a) for a in self.active.values() if a.event]}
-        tmp = self.path + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(data, f, indent=1)
-        os.replace(tmp, self.path)
+        tmp = f"{self.path}.{os.getpid()}.tmp"
+        try:
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            with open(tmp, "w") as f:
+                json.dump(data, f, indent=1)
+            os.replace(tmp, self.path)
+        except OSError:     # a full or read-only disk is just when the monitor has to keep running
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
 
     # -- rules -------------------------------------------------------------------------
 
@@ -291,6 +299,10 @@ class AlertEngine:
             a.resolved = now
             self.history.insert(0, self.active.pop(key))
             changed = True
+        for key in list(self.acked):    # an acknowledgement covers one incident, even one that ended while switched off
+            if key not in self.active and (key not in conds or conds[key].level is None):
+                self.acked.pop(key)
+                changed = True
         for ev in self.events(s, now):
             if ev.key not in self.active:
                 self.active[ev.key] = ev

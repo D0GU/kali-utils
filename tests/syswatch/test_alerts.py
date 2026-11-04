@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # kali-utils root
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from syswatch import ui  # noqa: E402
-from syswatch.alerts import DEFAULTS, AlertEngine, load_thresholds  # noqa: E402
+from syswatch.alerts import DEFAULTS, AlertEngine, _ident, load_thresholds  # noqa: E402
 from test_syswatch import fake_snapshot, text  # noqa: E402
 
 GB = 1024 ** 3
@@ -182,6 +182,54 @@ class TestDisksAndAcks(EngineCase):
         th = load_thresholds(cfg)
         self.assertEqual(th["cpu_percent"], 50)
         self.assertNotIn("bogus_key", th)
+
+
+class TestReviewFixes(EngineCase):
+    def disk(self, name, health="ok", reasons=(), model="Same Model", serial="", smart=None):
+        return {"name": name, "model": model, "serial": serial, "kind": "SSD", "transport": "sata", "health": health,
+                "health_reasons": list(reasons), "smart": smart, "size": 1, "temp": None}
+
+    def test_two_drives_of_one_model_keep_separate_alerts(self):
+        s = calm()
+        s["disks"] = [self.disk("sda", "fail", ["SMART says the drive is failing"]), self.disk("sdb", "warn", ["5 reallocated sectors"])]
+        raised = self.engine(immediate=True).evaluate(s, 1000)
+        self.assertEqual(sorted(a.level for a in raised), ["crit", "warn"])
+
+    def test_drive_identity_prefers_the_serial_and_tells_models_apart(self):
+        self.assertEqual(_ident({"name": "sda", "model": "M", "serial": "S1"}), "S1")
+        self.assertNotEqual(_ident({"name": "sda", "model": "M", "serial": ""}), _ident({"name": "sdb", "model": "M", "serial": ""}))
+
+    def test_a_failed_save_does_not_stop_the_monitor(self):
+        with open(os.path.join(self.tmp.name, "file"), "w") as f:
+            f.write("a file, so no folder can go here")
+        e = AlertEngine(dict(DEFAULTS), os.path.join(self.tmp.name, "file", "alerts.json"), immediate=True)
+        s = calm()
+        s["disks"] = [self.disk("sda", "warn", ["5 reallocated sectors"])]
+        self.assertEqual(len(e.evaluate(s, 1000)), 1)
+
+    def test_an_acknowledgement_ends_with_the_incident(self):
+        e = self.engine(immediate=True)
+        s = calm()
+        s["disks"] = [self.disk("sda", "warn", ["5 reallocated sectors"], serial="S")]
+        (a,) = e.evaluate(s, 1000)
+        e.ack(a.key)
+        self.assertEqual(e.evaluate(s, 1001), [])                  # still acknowledged while it lasts
+        s["disks"] = [self.disk("sda", serial="S")]
+        e.evaluate(s, 1002)                                        # it resolves
+        s["disks"] = [self.disk("sda", "warn", ["5 reallocated sectors"], serial="S")]
+        self.assertEqual(len(e.evaluate(s, 1003)), 1)              # a new incident is news
+
+    def test_an_incident_that_ended_while_syswatch_was_off_ends_its_acknowledgement(self):
+        e = self.engine(immediate=True)
+        s = calm()
+        s["disks"] = [self.disk("sda", "warn", ["5 reallocated sectors"], serial="S")]
+        (a,) = e.evaluate(s, 1000)
+        e.ack(a.key)
+        restarted = self.engine(immediate=True)
+        healthy = calm()
+        healthy["disks"] = [self.disk("sda", serial="S")]
+        restarted.evaluate(healthy, 2000)
+        self.assertEqual(len(restarted.evaluate(s, 2001)), 1)
 
 
 class TestAlertViews(EngineCase):

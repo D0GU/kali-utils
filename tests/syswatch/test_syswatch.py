@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -91,6 +92,96 @@ class TestHealth(unittest.TestCase):
         self.assertEqual(collect.health_verdict("SSD", {"state": "offline"}, None, [], None)[0], "fail")
 
 
+class TestVanishedDrives(unittest.TestCase):
+    def sysfs(self, tmp, *names, removable=()):
+        for name in names:
+            p = Path(tmp, "block", name, "device")
+            p.mkdir(parents=True)
+            Path(tmp, "block", name, "size").write_text("1000\n")
+            Path(tmp, "block", name, "removable").write_text("1\n" if name in removable else "0\n")
+            (p / "model").write_text("M\n")
+
+    def collector(self, tmp):
+        with mock.patch.object(collect, "SYS", tmp), mock.patch.object(collect, "disk_kind", lambda n: ("SSD", "sata")):
+            return collect.Collector(slow=False)
+
+    def refresh(self, c, tmp):
+        with mock.patch.object(collect, "SYS", tmp), mock.patch.object(collect, "disk_kind", lambda n: ("SSD", "sata")):
+            c.refresh_disks()
+
+    def test_a_fixed_drive_that_disappears_stays_listed_and_is_marked_gone(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.sysfs(tmp, "sda", "sdb")
+            c = self.collector(tmp)
+            shutil.rmtree(Path(tmp, "block", "sdb"))
+            self.refresh(c, tmp)
+            self.assertEqual([(d["name"], d.get("gone", False)) for d in c.disks], [("sda", False), ("sdb", True)])
+
+    def test_a_removable_drive_just_goes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.sysfs(tmp, "sda", "sdc", removable=("sdc",))
+            c = self.collector(tmp)
+            shutil.rmtree(Path(tmp, "block", "sdc"))
+            self.refresh(c, tmp)
+            self.assertEqual([d["name"] for d in c.disks], ["sda"])
+
+    def test_a_drive_plugged_in_later_appears_and_a_returning_one_recovers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.sysfs(tmp, "sda")
+            c = self.collector(tmp)
+            self.sysfs(tmp, "sdb")
+            self.refresh(c, tmp)
+            self.assertEqual([d["name"] for d in c.disks], ["sda", "sdb"])
+            shutil.rmtree(Path(tmp, "block", "sdb"))
+            self.refresh(c, tmp)
+            self.sysfs(tmp, "sdb")
+            self.refresh(c, tmp)
+            self.assertEqual([d.get("gone", False) for d in c.disks], [False, False])
+
+    def test_a_gone_drive_is_failing_whatever_its_cached_data_says(self):
+        level, reasons = collect.health_verdict("SSD", {"state": None, "gone": True}, {"available": True, "findings": []}, [], None)
+        self.assertEqual(level, "fail")
+        self.assertIn("disappeared", " ".join(reasons))
+
+    def test_the_serial_falls_back_to_the_wwid(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.sysfs(tmp, "sda")
+            Path(tmp, "block", "sda", "device", "wwid").write_text("t10.ATA     M   S123\n")
+            with mock.patch.object(collect, "SYS", tmp), mock.patch.object(collect, "disk_kind", lambda n: ("SSD", "sata")):
+                self.assertEqual(collect.block_devices()[0]["serial"], "t10.ATA     M   S123")
+
+
+class TestStuckMounts(unittest.TestCase):
+    MOUNTS = "/dev/sda1 /ok ext4 rw 0 0\n//nas/share /stuck cifs rw 0 0\n"
+
+    def run_with(self, tmp, statvfs):
+        Path(tmp, "mounts").write_text(self.MOUNTS)
+        with mock.patch.object(collect, "PROC", tmp), mock.patch.object(collect.os, "statvfs", statvfs):
+            started = time.monotonic()
+            found = collect.filesystems()
+            return found, time.monotonic() - started
+
+    def test_a_hung_mount_cannot_freeze_the_dashboard(self):
+        release = threading.Event()
+        self.addCleanup(release.set)
+        real = os.statvfs("/")
+
+        def statvfs(path):
+            if path == "/stuck":
+                release.wait(20)
+            return real
+        with tempfile.TemporaryDirectory() as tmp:
+            found, took = self.run_with(tmp, statvfs)
+            self.assertLess(took, 3)
+            self.assertEqual([f["mount"] for f in found], ["/ok"])
+            _, again = self.run_with(tmp, statvfs)   # it isn't waited for on every refresh
+            self.assertLess(again, 0.5)
+            release.set()
+            time.sleep(0.2)
+            found, _ = self.run_with(tmp, lambda p: real)
+            self.assertEqual(sorted(f["mount"] for f in found), ["/ok", "/stuck"])    # back once it answers
+
+
 class TestDrivePolling(unittest.TestCase):
     def test_should_poll_rules(self):
         self.assertTrue(collect.should_poll(True, 100, None, 5, 600))              # never read yet
@@ -123,9 +214,11 @@ class TestDrivePolling(unittest.TestCase):
             proc = Path(tmp)
             stats = lambda n: (proc / "diskstats").write_text(f"   8 0 sda {n} 0 8 1 0 0 0 0 0 1 1 0 0 0 0\n")
             stats(10)
-            os.makedirs(tmp + "/sys")
+            os.makedirs(tmp + "/sys/block/sda")
+            Path(tmp, "sys/block/sda/size").write_text("1000\n")
             with mock.patch.object(collect, "PROC", str(proc)), \
                     mock.patch.object(collect, "SYS", self.fake_sys(tmp + "/sys")), \
+                    mock.patch.object(collect, "disk_kind", lambda name: ("HDD", "sata")), \
                     mock.patch.object(collect, "smartctl_health", return_value={"available": True}) as smart, \
                     mock.patch.object(collect, "journal_disk_errors", return_value={}), \
                     mock.patch.object(collect, "run", return_value=None):

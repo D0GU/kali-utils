@@ -99,3 +99,5 @@ Re-run it after adding a disk, or after updating syswatch to get the full report
 ```
 
 Tests cover the parsers, health rules and panel rendering (with a fake snapshot), a live read of this machine's `/proc`/`/sys`, and a tmux smoke test of the UI. Layout: `syswatch/collect.py` (data), `syswatch/alerts.py` (alert rules and state), `syswatch/ui.py` (curses), `syswatch/cli.py`, `bin/syswatch`.
+
+An acknowledgement covers one incident: if the problem clears and later returns, you're alerted again. A fixed drive that disappears stays listed as failing until it returns or syswatch restarts; a removable or USB drive just leaves the list. A mount that stops answering, such as a network share, is left out until it responds, so it can't freeze the display.

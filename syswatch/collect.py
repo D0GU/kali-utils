@@ -170,7 +170,8 @@ def block_devices() -> list[dict]:
         model = (read(f"{path}/device/model") or read(f"{path}/device/name")).strip()
         kind, transport = disk_kind(name)
         disks.append({"name": name, "model": model, "size": size, "kind": kind, "transport": transport,
-                      "serial": read(f"{path}/device/serial").strip()})
+                      "serial": read(f"{path}/device/serial").strip() or read(f"{path}/device/wwid").strip(),   # SATA has only the wwid
+                      "removable": read(f"{path}/removable").strip() == "1" or transport == "usb"})
     return disks
 
 
@@ -185,6 +186,33 @@ def parent_disk(dev: str) -> str:
     return parent if os.path.exists(f"{SYS}/block/{parent}") else name
 
 
+_STATVFS_WAIT = 1.0
+_stuck_mounts: dict[str, threading.Thread] = {}
+
+
+def _statvfs(mount: str):
+    """os.statvfs with a limit. A network share that has gone away can block forever, and this runs on the UI thread.
+    A mount still blocked is skipped, without waiting again, until it answers."""
+    blocked = _stuck_mounts.get(mount)
+    if blocked and blocked.is_alive():
+        return None
+    _stuck_mounts.pop(mount, None)
+    result = []
+
+    def work():
+        try:
+            result.append(os.statvfs(mount))
+        except OSError:
+            pass
+    worker = threading.Thread(target=work, daemon=True)
+    worker.start()
+    worker.join(_STATVFS_WAIT)
+    if worker.is_alive():
+        _stuck_mounts[mount] = worker
+        return None
+    return result[0] if result else None
+
+
 def filesystems() -> list[dict]:
     out, seen = [], set()
     for line in read(f"{PROC}/mounts").splitlines():
@@ -194,9 +222,8 @@ def filesystems() -> list[dict]:
         dev, mnt, fstype = parts[0], parts[1].replace("\\040", " "), parts[2]
         if fstype in PSEUDO_FS or not dev.startswith("/") or mnt.startswith(("/snap", "/boot/efi")):
             continue
-        try:
-            st = os.statvfs(mnt)
-        except OSError:
+        st = _statvfs(mnt)
+        if st is None:
             continue
         key = (dev, st.f_blocks)
         if key in seen:
@@ -346,6 +373,8 @@ def sysfs_gpu(g: dict) -> dict:
 def kernel_disk_health(name: str) -> dict:
     dev = f"{SYS}/block/{name}/device"
     h = {"state": read(f"{dev}/state").strip() or None}
+    if not os.path.exists(f"{SYS}/block/{name}"):
+        h["gone"] = True
     for key in ("ioerr_cnt", "iodone_cnt", "iotmo_cnt"):
         raw = read(f"{dev}/{key}").strip()
         if raw:
@@ -522,6 +551,8 @@ def health_verdict(kind: str, kernel: dict, smart: dict | None, journal: list[st
         if order[new] > order[level]:
             level = new
         reasons.append(why)
+    if kernel.get("gone"):
+        bump("fail", "the drive has disappeared from the system")
     if kernel.get("state") and kernel["state"] not in ("running", "live"):
         bump("fail", f"device state: {kernel['state']}")
     if smart and smart.get("available"):
@@ -637,6 +668,15 @@ class Collector:
         self._stop.set()
         self._wake.set()
 
+    def refresh_disks(self) -> None:
+        """Notice drives plugged in or lost since starting. A fixed drive that vanishes stays listed, as failing; a
+        removable one has simply been taken out. This only reads /sys, so it wakes nothing."""
+        now = {d["name"]: d for d in block_devices()}
+        for d in self.disks:
+            if d["name"] not in now and not d.get("removable"):
+                now[d["name"]] = {**d, "gone": True}
+        self.disks = [now[name] for name in sorted(now)]
+
     def refresh_slow(self) -> None:
         """Re-read slow sources now, including querying drives (the user asked, so waking one is fine)."""
         self._force = True
@@ -646,6 +686,8 @@ class Collector:
         ios = {n: v["reads"] + v["writes"] for n, v in parse_diskstats(read(f"{PROC}/diskstats")).items()}
         due_temps = set()
         for d in self.disks:
+            if d.get("gone"):
+                continue
             n, rotating, count = d["name"], "HDD" in d["kind"], ios.get(d["name"], 0)
             if should_poll(rotating, now, self.polled["smart"].get(n), count, SMART_INTERVAL, force):
                 self.smart_cache[n] = smartctl_health(n) or udisks_smart(n)
@@ -668,6 +710,7 @@ class Collector:
 
     def collect_slow(self, now: float | None = None) -> None:
         force, self._force = self._force, False
+        self.refresh_disks()
         self._poll_drives(now if now is not None else time.monotonic(), force)
         names = [d["name"] for d in self.disks]
         nv = nvidia_gpus() if any(g["vendor"] == "nvidia" for g in self.pci) else None
