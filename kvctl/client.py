@@ -143,6 +143,15 @@ class Kavita:
                 "sortOptions": {"sortField": SORT_NAME, "isAscending": True}, "limitTo": 0}
         return self._call("POST", "/api/Series/all-v2", {"PageNumber": page, "PageSize": size}, body) or []
 
+    def all_series(self, library_id: int | None = None, size: int = 200) -> list[dict]:
+        out: list[dict] = []
+        for page in range(1, 501):
+            batch = self.series(library_id, page, size)
+            out += batch
+            if len(batch) < size:
+                break
+        return out
+
     def search(self, query: str) -> dict:
         return self._call("GET", "/api/Search/search", {"queryString": query, "includeChapterAndFiles": False}) or {}
 

@@ -6,7 +6,7 @@
 set -eu
 ROOT="$(dirname "$(realpath "$0")")"
 BIN="${KALI_UTILS_BIN:-$HOME/.local/bin}"
-TOOLS=(trctl plexsort syswatch)
+TOOLS=(trctl plexsort syswatch kvctl bookread)
 
 if [[ "${1:-}" == "--remove" ]]; then
   for t in "${TOOLS[@]}"; do
@@ -22,4 +22,4 @@ for t in "${TOOLS[@]}"; do
   echo "linked $BIN/$t -> $ROOT/bin/$t"
 done
 case ":$PATH:" in *":$BIN:"*) ;; *) echo "note: $BIN is not on your PATH" ;; esac
-echo "done. Try: trctl --version; plexsort --version; syswatch --version"
+echo "done. Try: trctl --version; plexsort --version; syswatch --version; kvctl --version; bookread --version"

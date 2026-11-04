@@ -60,6 +60,14 @@ def _toml(v) -> str:
 def save(cfg: dict) -> Path:
     path = config_path()
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    stored: dict = {}
+    if path.exists():
+        with path.open("rb") as f:
+            stored = tomllib.load(f)
+    cfg = dict(cfg)
+    for key, env in (("api_key", "KVCTL_API_KEY"), ("url", "KVCTL_URL")):   # environment overrides stay out of the file
+        if os.environ.get(env) and cfg.get(key) == os.environ[env]:
+            cfg[key] = stored.get(key, DEFAULTS[key])
     lines = ["# kvctl configuration - edit with `kvctl setup`, `kvctl config` or Settings in the UI", ""]
     lines += [f"{k} = {_toml(cfg.get(k, d))}" for k, d in DEFAULTS.items()]
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)

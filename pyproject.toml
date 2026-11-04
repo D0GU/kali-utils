@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "kali-utils"
 version = "0.1.0"
-description = "Terminal utilities for this home server: trctl (Transmission), plexsort (Plex library sorter), syswatch (system monitor)"
+description = "Terminal utilities for this home server: trctl (Transmission), plexsort (Plex library sorter), syswatch (system monitor), kvctl (Kavita and book importer), bookread (terminal e-book reader)"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []          # standard library only
@@ -14,6 +14,8 @@ dependencies = []          # standard library only
 trctl = "trctl.cli:main"
 plexsort = "plexsort.cli:main"
 syswatch = "syswatch.cli:main"
+kvctl = "kvctl.cli:main"
+bookread = "bookread.cli:main"
 
 [tool.setuptools]
-packages = ["kutil", "trctl", "plexsort", "syswatch"]
+packages = ["kutil", "trctl", "plexsort", "syswatch", "kvctl", "bookread"]

@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS operations (
     torrent_removed INTEGER DEFAULT 0, leftovers_deleted INTEGER DEFAULT 0, message TEXT);
 CREATE TABLE IF NOT EXISTS changes (
     id INTEGER PRIMARY KEY, operation_id INTEGER REFERENCES operations(id),
-    kind TEXT NOT NULL,      -- moved | created | edited
+    kind TEXT NOT NULL,      -- moved | created | edited | epub (the package document inside a book, in `original`)
     src TEXT, dst TEXT NOT NULL, original TEXT, book_id INTEGER, title TEXT, status TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS changes_op ON changes(operation_id);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -68,6 +68,14 @@ class DB:
 
     def changes(self, op_id: int) -> list:
         return self.conn.execute("SELECT * FROM changes WHERE operation_id = ? ORDER BY id", (op_id,)).fetchall()
+
+    def later_operations_on_same_books(self, op_id: int) -> list[int]:
+        """Later operations, not undone, that changed a book this one changed."""
+        return [r["id"] for r in self.conn.execute("""
+            SELECT DISTINCT o.id FROM changes c JOIN operations o ON o.id = c.operation_id
+            WHERE o.id > ? AND o.status != 'undone' AND c.status = 'done' AND c.book_id IN (
+                SELECT book_id FROM changes WHERE operation_id = ? AND status = 'done' AND book_id IS NOT NULL)
+            ORDER BY o.id DESC""", (op_id, op_id)).fetchall()]
 
     def set_change(self, change_id: int, status: str) -> None:
         self.conn.execute("UPDATE changes SET status = ? WHERE id = ?", (status, change_id))

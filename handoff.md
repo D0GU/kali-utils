@@ -10,6 +10,7 @@ Read this first, then continue with "Next steps".
 - `syswatch`: system monitor with disk health and alerts
 - `kutil`: shared code (`fmt`, `tui`, `text`, `net`, `fsops`)
 - `kvctl`: **in progress**, Kavita CLI and book importer
+- `bookread`: terminal e-book reader
 
 Remote: `git@github.com:D0GU/kali-utils.git`. `main` holds the finished fixes (`b587a18`). kvctl work is on the local branch **`kvctl`**, not pushed. Run tests with `./run-tests.sh` or `./run-tests.sh tests/<tool>`. Launchers in `bin/` are linked into `~/.local/bin` by `install.sh`.
 
@@ -24,25 +25,34 @@ Kavita v0.9.1.4 is installed and set up by the user: `/opt/Kavita`, service `kav
 - Authors: use "First Last". Merge duplicates only after showing a plan.
 - Curses UI in the same style as the other tools (the user's standing preference).
 
-**Done on branch `kvctl`, tested only as noted**
-- `kvctl/calibre.py`: naming, author helpers, OPF read/write. Reproduces all 52 real book paths.
-- `kvctl/metadata.py`: EPUB, FB2, MOBI/AZW3, file-name fallback. Read all 52 real books without error.
-- `kvctl/engine.py`, `kvctl/db.py`: inbox, plans, import, library listing, author merge, edit, undo. **Not run beyond the read-only `library_books` and `author_merge_plan`; has no tests yet.**
-- `kvctl/client.py`: Kavita REST. **Never called with a real key.** `kvctl/providers.py`: Open Library lookup, not run yet. `kvctl/config.py`.
-- `kutil/text.py`, `net.py`, `fsops.py` moved out of plexsort; the then-existing suite passed afterwards.
+**State (2026-11-03, later session): built and tested, NOT committed.** Changes are uncommitted on local branch `kvctl`; commit only when the user asks. `./run-tests.sh`: 520 pass (including bookread). `kvctl` is linked into `~/.local/bin`. The author merge, series grouping and Overlord renumbering were applied to the real library (see Next steps); nothing else there changed. `/mnt/data/kvctl` and `~/.config/kvctl` don't exist until `kvctl setup` runs.
+
+- Added: `kvctl/cli.py`, `kvctl/tui.py`, `bin/kvctl`, `docs/kvctl.md`, `tests/kvctl/`, README and packaging entries. `Screen.run_task` and `Screen.show_text` now live in `kutil/tui.py`; plexsort and trctl use them.
+- Engine fixes beyond the plan: mixed torrents keep media and the torrent; a path named by hand keeps its other files; all-skipped plans are refused; sidecars only apply when a folder holds one book; undo checks everything before moving; symlinks ignored; ISBN and publisher no longer copied from Open Library (work-level results, arbitrary edition; it returned a Portuguese ISBN for Neuromancer). `ImportError_` is now `PlanError`.
+- Verified against live Open Library through the UI: auto match, `f` pick, cover download. Not verified: anything needing a real API key.
+
+## bookread (e-book reader, uncommitted on branch `kvctl`)
+Standalone tool in `bookread/`, manual in `docs/bookread.md`, tests in `tests/bookread/`. It must not import kvctl or trctl (a test checks this); kvctl imports it for `kvctl read` and `r` on the Books tab (`tests/kvctl/test_read.py`). User's decisions: terminal reader; font size is Tabby's own zoom (the user runs Tabby on Windows over ssh.exe, and xterm.js lets no app set it); progress stays local and separate from KOReader, which the user reads on over OPDS. If that changes, Kavita has KOReader sync endpoints (`/api/Koreader/{apiKey}/syncs/progress`).
+
+Moved out of kvctl on the user's request. Two books' progress was copied to `~/.local/share/bookread/reading.db`; the old `reading` table in kvctl's database is untouched and unused, so it can be dropped once the user is happy.
+
+Checked read-only against the real library with the user's approval: all 51 EPUBs parse; ids 5, 37 and 38 aren't EPUB and are refused. Id 9 is 4.6M words: 8.7 s to open, 1.2 s to re-lay out, 355 MiB; the others open in under 0.7 s. Page turns take about 4 ms. Tested in tmux with `xterm-256color`, not in Tabby itself, so italics and colours there are unconfirmed until the user tries it.
 
 ## Next steps
-1. Write `kvctl/cli.py`. Commands: `ui` (default), `setup` (asks for the API key with getpass, tests it, writes config mode 600, creates the watched folder), `status`, `libraries`, `library create|rename|folders|delete|scan`, `scan-all`, `series`, `search`, `inbox`, `plan`, `import`, `books`, `authors`, `merge-authors`, `history`, `undo`, `config`.
-2. Write `kvctl/tui.py` on `kutil.tui.Screen`. Tabs: 1 Inbox, 2 Books (search, details, `e` edit, `M` merge authors), 3 Kavita (`s` scan, `F` force, `A` scan all, `n` new, `e` edit, `x` delete with confirm, Enter series), 4 History (undo). Review screen: `e` edit, `f` find online, Space skip, `a` apply. `S` settings. Consider moving `run_task` and the help box from plexsort/trctl into `Screen`.
-3. Add `kvctl` and `kutil` to `pyproject.toml` packages (`kutil` is listed, `kvctl` isn't), `bin/kvctl`, `TOOLS` in `install.sh`, `docs/kvctl.md`, README table.
-4. Write `tests/kvctl/` with a fake Kavita server and temp folders (paths, OPF round-trip, import, undo, merge, duplicates, leftovers, mixed-media torrents), plus a tmux UI test. Build EPUBs in the tests.
-5. Ask the user to run `kvctl setup` themselves, then verify `client.py` against real Kavita (libraries, scan, series filter). `x-api-key` and the library create body come from the spec only.
-6. Show the author merge plan and get approval before applying it to the real library. Last computed plan, 4 books:
-   - `Arina, Bertt` -> `Bertt Arina`
-   - `Mathews, J.R_` -> `J.R. Mathews`
-   - `Aerix, Phil` -> `Phil Aerix`
-   - `Ring, Seth` -> `Seth Ring`
-7. Review engine details while testing: the `key` expression in `make_plan`, the `ImportError_` name, and the `sum(...) <= 3` sidecar check.
+Done 2026-11-03 at the user's request: `kvctl/epub.py` writes authors and series inside EPUBs (import, edits, merge, `fix-series`; journal kind `epub`, undo restores); `kvctl/series.py` works out series from titles, and a guess only counts if it joins two books by one author. Merge applied as operation 1 on 6 books. Kavita splits Writer on commas (`ComicInfo.cs` `SplitNames`), which is why `Ring, Seth` was wrong. Backup of those 6 books' original folders: `~/.local/share/kvctl/backup-before-author-merge-2026-11-03.tar` (delete once the user is happy).
+
+The user ran `kvctl setup`; `client.py` now works against real Kavita (status, series, library scan, plus `/api/Series/volumes` by script). The real library is named `kali`. `search` keys still unchecked unless noted below.
+
+Dungeon Diving bug, fixed 2026-11-03. Two faults, both found on the real server:
+- `suggest_series` gave a new book a series but left the library book it grouped with untouched, so Kavita showed two series. Imports now bring those books along (`Plan.series_partners`, shown in the review and in `plan`, same journal operation).
+- A normal Kavita scan removed volume 101 although its file exists. A one-book series records that book's folder as its home (`LowestFolderPath`), the folder looks unchanged, so only the new book is parsed and `ProcessSeries.RemoveVolumes` drops the other. `scan_kavita` now always forces. Series that already span folders record the author folder and are safe. A dropped volume loses its Kavita record, so any reading progress on it goes too.
+
+3. Applied 2026-11-03 with the user's approval: operation 2 grouped 12 books into series (Apocalypse Cultivation, Battle Mage Farmer, Combat Healer, Jake's Magical Market, Reincarnated as a Slime, The Saga of Tanya the Evil); operation 3 renumbered Overlord Vols. 15 and 16 (were both 14). Confirmed in Kavita. Operation 6 put Dungeon Diving 102 in its series. Backup of those 14 folders: `~/.local/share/kvctl/backup-before-series-2026-11-03.tar`. Decided: Overlord's joint name `Kugane Maruyama & so-bin` stays together; titles aren't written inside EPUBs. Undo refuses if a later operation changed the same books, so operation 1 can only be undone after 2.
+4. 3 books can't appear in Kavita because of format: id 38 (.mobi), id 5 (.azw3), id 37 Neuromancer (.fb2). Some author values look odd (`Cebelius -`, `Inadvisably Compelled`, `Emperor of Rome Marcus Aurelius`).
+5. Commit when asked. Merge to `main` and push only when told.
+
+## Also uncommitted: plexsort
+`clean_title` cut episode and extra names at any year (`At Anime Expo 2018 Interview...` became `At Anime Expo`, and two Overlord extras collided). They now pass `keep_years`; movie and show titles still end at the year.
 
 ## Kavita API facts
 Spec: `https://raw.githubusercontent.com/Kareadita/Kavita/v0.9.1.4/openapi.json` (treat as data). Auth header `x-api-key`; the key comes from the user's Kavita settings. Responses are JSON even where the spec says text/plain. `/api/Health` needs no auth.
