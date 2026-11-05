@@ -39,6 +39,10 @@ TURNING PAGES
   Home  End         start and end of the book
   c                 contents
 
+THE CHARACTERS
+  m                 Marginalia: talk to the people you've met so far
+  Tab               between the panel and the page
+
 HOW IT LOOKS
   t  T              next and previous colour theme
   [  ]              smaller and bigger side margins
@@ -147,6 +151,17 @@ def view(cols: int, rows: int, prefs: Prefs) -> View:
     return View(width, rows - 1 - 2 * margin, (cols - width) // 2, margin)
 
 
+def _open_marginalia(session):
+    """The reader works just the same without it, whatever goes wrong here."""
+    try:
+        from .marginalia.panel import Marginalia
+
+        margin = Marginalia(session)
+        return margin if margin.enabled else None
+    except (ImportError, OSError, ValueError, sqlite3.Error):
+        return None
+
+
 # --------------------------------------------------------------------------
 # A reading session
 # --------------------------------------------------------------------------
@@ -154,6 +169,7 @@ def view(cols: int, rows: int, prefs: Prefs) -> View:
 class Session:
     def __init__(self, book: ebook.Book, key: str, title: str, db, clock=time.monotonic):
         self.book, self.key, self.title, self.db, self.clock = book, key, title, db, clock
+        self.authors: list[str] = []    # for Marginalia, so that a title page doesn't make the author a character
         self.pace = Pace.load(db)
         row = db.reading_get(key)
         self.finished_before = bool(row and row["percent"] >= 1)
@@ -339,6 +355,7 @@ class Reader(Screen):
         self.message: tuple[str, float] | None = None
         self.running = True
         self.too_small = False
+        self.margin = _open_marginalia(session)
         self.apply_theme()
 
     def apply_theme(self) -> None:
@@ -357,9 +374,15 @@ class Reader(Screen):
         if self.too_small:
             put(scr, 0, 0, f"Too small to read in ({MIN_COLS}×{MIN_ROWS}).")
             return
-        v = view(cols, rows, self.prefs)
+        m = self.margin
+        panel = m.width_for(cols) if m and m.is_open else 0
+        v = view(cols - (panel + 1 if panel else 0), rows, self.prefs)
         s = self.session
         s.set_view(v.width, v.rows)
+        if m and m.is_open and not panel:       # too narrow for both, so the panel has the window
+            m.draw(scr, 0, 1, cols - 2, rows - 1, self.theme.body, self.theme.status)
+            self.draw_status(rows - 1, cols)
+            return
         blocks = s.book.blocks
         for i, line in enumerate(s.layout.page_lines(s.page)):
             x = v.x + line.x
@@ -370,6 +393,10 @@ class Reader(Screen):
                 attr = base | (curses.A_BOLD if style & ebook.BOLD else 0) | (A_ITALIC if style & ebook.ITALIC else 0)
                 _write(scr, v.y + i, x, text, attr)
                 x += cell_width(text)
+        if panel:
+            for y in range(rows - 1):
+                put(scr, y, cols - panel - 1, "│", self.theme.status)
+            m.draw(scr, 0, cols - panel, panel - 1, rows - 1, self.theme.body, self.theme.status)
         self.draw_status(rows - 1, cols)
 
     def draw_status(self, y: int, cols: int) -> None:
@@ -392,19 +419,29 @@ class Reader(Screen):
             self.flash("? keys and settings")
         try:
             while self.running:
-                self.scr.timeout(200 if self.message else -1)   # only wake up to clear a message
                 self.draw()
                 self.scr.refresh()
+                # Only wake up to clear a message, or while the panel has news coming. Asked after drawing,
+                # because drawing is what finds out.
+                self.scr.timeout(200 if self.message or (self.margin and self.margin.animating) else -1)
                 key = read_key(self.scr)
                 if key is not None:
                     self.handle(key)
         finally:
+            if self.margin:
+                self.margin.close()
             self.scr.bkgd(" ", 0)
             self.scr.timeout(150)
 
     def handle(self, key) -> None:
-        self.act(key)
-        if key in ("UP", "DOWN"):
+        before = self.session.position
+        try:
+            self.act(key)
+            if self.margin and self.session.position != before:
+                self.margin.sync()
+        except (sqlite3.Error, OSError) as e:       # the panel's memory failing must never cost a page
+            self.flash(f"Marginalia: {e}")
+        if key in ("UP", "DOWN") and not (self.margin and self.margin.focused):
             curses.flushinp()       # a terminal turns one scroll-wheel notch into several arrows at once
         problem = self.session.take_problem()
         if problem:
@@ -412,7 +449,18 @@ class Reader(Screen):
 
     def act(self, key) -> None:
         s = self.session
-        if key == "q" or (key == "ESC" and _lone_escape(self.scr)):
+        m = self.margin
+        if m and m.focused and key != "RESIZE" and s.layout is not None and not self.too_small:
+            if key != "ESC" or _lone_escape(self.scr):
+                s.pause()
+                m.handle(key, m.width_for(self.scr.getmaxyx()[1]) == 0)
+            return
+        if m and key == "TAB" and m.is_open:
+            m.focused = True
+        elif m and key == "m" and s.layout is not None and not self.too_small:
+            s.pause()
+            m.toggle()
+        elif key == "q" or (key == "ESC" and _lone_escape(self.scr)):
             self.running = False
         elif key in ("RESIZE", "ESC") or s.layout is None or self.too_small:
             return
@@ -524,12 +572,15 @@ def read_book(app: Screen, store, path: str, title: str = "") -> str | None:
     """Open a book on `app`'s screen and read until it's closed. Returns why it couldn't be opened, if it couldn't."""
     if not library.is_readable(path):
         return f"The reader opens EPUB books; this one is {os.path.splitext(path)[1].lstrip('.') or 'something else'}"
-    title = title or library.read_entry(path).title
+    entry = library.read_entry(path)
+    title = title or entry.title
     try:
         loaded = app.run_task(f"Opening {title[:60]}", lambda log: ebook.load(path))
     except ebook.EbookError as e:
         return f"{title}: {e}"
-    Reader(app.scr, Session(loaded, library.book_key(path), title, store)).run()
+    session = Session(loaded, library.book_key(path), title, store)
+    session.authors = entry.authors
+    Reader(app.scr, session).run()
     return None
 
 
