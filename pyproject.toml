@@ -10,6 +10,9 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []          # standard library only
 
+[project.optional-dependencies]
+marginalia = ["anthropic"]  # bookread's characters, when they run on Claude
+
 [project.scripts]
 trctl = "trctl.cli:main"
 plexsort = "plexsort.cli:main"
@@ -18,4 +21,4 @@ kvctl = "kvctl.cli:main"
 bookread = "bookread.cli:main"
 
 [tool.setuptools]
-packages = ["kutil", "trctl", "plexsort", "syswatch", "kvctl", "bookread"]
+packages = ["kutil", "trctl", "plexsort", "syswatch", "kvctl", "bookread", "bookread.marginalia"]
