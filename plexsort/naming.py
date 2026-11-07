@@ -43,6 +43,8 @@ def id_tag(category: str, ids: dict) -> str:
     order = ["tvdb", "tmdb", "imdb"] if category == "show" else ["tmdb", "imdb", "tvdb"]
     for key in order:
         value = ids.get(key)
+        if isinstance(value, (list, tuple)):   # never write '{tmdb-[732203]}'
+            value = value[0] if value else None
         if value:
             return f" {{{key}-{value}}}"
     return ""
