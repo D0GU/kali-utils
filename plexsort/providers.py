@@ -415,6 +415,13 @@ def download_cover(mbid: str, dest: str, timeout: float = 20) -> bool:
     return True
 
 
+def _first_id(value):
+    """An id from the anime map, which holds a number, a list of numbers or nothing."""
+    if isinstance(value, list):
+        value = value[0] if value else None
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
 class AnimeMap:
     """Fribb/anime-lists: AniList/MAL ids -> TVDB/TMDB/IMDb ids (cached on disk, refreshed every 2 weeks)."""
 
@@ -424,11 +431,20 @@ class AnimeMap:
         self._by_anilist: dict | None = None
         self._by_mal: dict = {}
         self.error = ""
+        self._lock = threading.Lock()   # lookups run in parallel; all of them wait for the first load
 
     def _load(self) -> None:
         if self._by_anilist is not None:
             return
-        self._by_anilist = {}
+        with self._lock:
+            if self._by_anilist is None:
+                self._load_locked()
+
+    def _load_locked(self) -> None:
+        # Fill local dicts and publish them only when complete: a half-built map gave lookups no ids
+        # (Gintama's films lost their tags, 7 Nov 2026).
+        by_anilist: dict = {}
+        by_mal: dict = {}
         try:
             fresh = self.path.exists() and time.time() - self.path.stat().st_mtime < 14 * DAY
             if not fresh:
@@ -444,13 +460,16 @@ class AnimeMap:
         except (OSError, ValueError, urllib.error.URLError) as e:
             if not self.path.exists():
                 self.error = f"anime id map unavailable: {e}"
+                self._by_anilist = {}
                 return
             entries = json.loads(self.path.read_text())
         for e in entries:
             if e.get("anilist_id"):
-                self._by_anilist[e["anilist_id"]] = e
+                by_anilist[e["anilist_id"]] = e
             if e.get("mal_id"):
-                self._by_mal[e["mal_id"]] = e
+                by_mal[e["mal_id"]] = e
+        self._by_mal = by_mal
+        self._by_anilist = by_anilist     # last: a non-None value means "loaded"
 
     def lookup(self, anilist=None, mal=None) -> dict:
         self._load()
@@ -461,13 +480,13 @@ class AnimeMap:
         if e.get("tvdb_id"):
             ids["tvdb"] = e["tvdb_id"]
         tmdb = e.get("themoviedb_id")
-        if isinstance(tmdb, dict):
-            if e.get("type") == "MOVIE" and tmdb.get("movie"):
-                ids["tmdb"] = tmdb["movie"]
-            elif e.get("type") != "MOVIE" and tmdb.get("tv"):
-                ids["tmdb"] = tmdb["tv"]
-        elif isinstance(tmdb, int):
-            ids["tmdb"] = tmdb
+        if isinstance(tmdb, dict):     # the map sometimes holds a list here: {"movie": [732203]}
+            if e.get("type") == "MOVIE" and (v := _first_id(tmdb.get("movie"))):
+                ids["tmdb"] = v
+            elif e.get("type") != "MOVIE" and (v := _first_id(tmdb.get("tv"))):
+                ids["tmdb"] = v
+        elif v := _first_id(tmdb):
+            ids["tmdb"] = v
         imdb = e.get("imdb_id")
         if isinstance(imdb, list) and imdb:
             ids["imdb"] = imdb[0]

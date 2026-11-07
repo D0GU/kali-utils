@@ -38,6 +38,9 @@ CHECKSUM_RE = re.compile(r"\s*[\[(][0-9A-Fa-f]{8}[\])]")
 EPWORD_RE = re.compile(r"(?i)(?<![a-z0-9])(?:ep(?:isode)?\.?[ ._-]*|e)(\d{1,4})(?:\s*[-~]\s*(\d{1,4}))?(?![0-9])")
 ANIME_DASH_RE = re.compile(r"(?:^|\s)-\s+(\d{1,4})(?:v\d)?(?=\s|$|\[|\()")
 LEADING_NUM_RE = re.compile(r"^(\d{1,4})(?:v\d)?(?:\s*[-.]\s+|\s+|$)")
+# 'Show 003', 'Show 001-002': a bare number ending the name (some BD anime packs). Only trusted for a run of
+# same-named files in one folder; see _trailing_episode.
+TRAILING_NUM_RE = re.compile(r"(?<=\S)\s+(\d{1,4})(?:v\d)?(?:\s*-\s*(\d{1,4}))?$")
 SEASON_RE = re.compile(r"(?i)(?<![a-z])(?:season|staffel|saison|temporada)[ ._-]*(\d{1,2})(?!\d)|"
                        r"(?<![a-z0-9])s(\d{1,2})(?![0-9e])|^series[ ._-]*(\d{1,2})$")
 SPECIAL_RE = re.compile(r"(?i)(?<![a-z])(ova|oad|ona|ovas|specials?|sp\d{0,2})(?![a-z])")
@@ -423,6 +426,8 @@ def classify_video(rel: str, size: int, root_name: str, siblings: dict[str, list
             numbered = [s for s in siblings.get(folder, []) if LEADING_NUM_RE.match(despace(strip_tags(s)))]
             if m and len(numbered) >= 2 and not (1900 <= int(m.group(1)) <= 2100):
                 ep_match, item.note = m, "numbered files in a folder"
+        if not ep_match and (m := _trailing_episode(tagless, siblings.get("/".join(dirs), []))):
+            ep_match, item.note = m, "numbered run of same-named files"
         if ep_match:
             item.kind = "episode"
             item.episode = int(ep_match.group(1))
@@ -465,6 +470,24 @@ def classify_video(rel: str, size: int, root_name: str, siblings: dict[str, list
     _assign_movie_title(item, stem, dirs, root_name)
     return item
 
+
+
+def _trailing_episode(tagless: str, siblings: list[str]) -> re.Match | None:
+    """'Show 003' is an episode only when its folder holds a run of 'Show NNN' files: at least 3 with zero-padded
+    numbers, or at least 5 otherwise, none dated. 'Rocky 2', 'Rocky 3' or 'Apollo 13' stay movies."""
+    m = TRAILING_NUM_RE.search(tagless)
+    if not m or 1900 <= int(m.group(1)) <= 2100 or find_year(tagless[:m.start()]):
+        return None
+    prefix = tagless[:m.start()].strip().lower()
+    run = []
+    for s in siblings:
+        t = despace(strip_tags(CHECKSUM_RE.sub("", s)))
+        if (sm := TRAILING_NUM_RE.search(t)) and t[:sm.start()].strip().lower() == prefix:
+            if 1900 <= int(sm.group(1)) <= 2100 or find_year(t[:sm.start()]):
+                return None
+            run.append(sm.group(1))
+    padded = sum(1 for n in run if len(n) >= 2 and n.startswith("0"))
+    return m if len(run) >= 5 or (len(run) >= 3 and padded >= 1) else None
 
 def _assign_show_title(item: Item, prefix: str, dirs: list[str], root_name: str) -> None:
     item.category = "show"

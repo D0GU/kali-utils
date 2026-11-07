@@ -178,6 +178,42 @@ class TestProviders(unittest.TestCase):
             self.assertNotIn("tmdb", movie)  # a TV tmdb id must not be used for a movie
             self.assertEqual(naming.id_tag("movie", movie), " {imdb-tt1288461}")
 
+    def test_a_listed_tmdb_id_is_unwrapped(self):
+        # Gintama: THE VERY FINAL came out as '{tmdb-[732203]}' (7 Nov 2026): the map had {"movie": [732203]}
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "anime-list-full.json").write_text(json.dumps([
+                {"type": "MOVIE", "anilist_id": 114129, "mal_id": 39486, "themoviedb_id": {"movie": [732203]},
+                 "imdb_id": "tt10766468"},
+                {"type": "TV", "anilist_id": 918, "themoviedb_id": [57041]}]))
+            m = AnimeMap(Http(None), tmp)
+            movie = m.lookup(anilist=114129)["ids"]
+            self.assertEqual(movie["tmdb"], 732203)
+            self.assertEqual(naming.id_tag("movie", movie), " {tmdb-732203}")
+            self.assertEqual(m.lookup(anilist=918)["ids"]["tmdb"], 57041)
+        self.assertEqual(naming.id_tag("movie", {"tmdb": [732203]}), " {tmdb-732203}")   # ids saved before the fix
+
+    def test_parallel_lookups_wait_for_the_map(self):
+        # plexsort matches titles in parallel; lookups made while the map was loading got no ids (7 Nov 2026)
+        import threading
+        from unittest import mock
+        from plexsort import providers
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "anime-list-full.json").write_text(json.dumps([
+                {"type": "MOVIE", "anilist_id": 7472, "mal_id": 7472, "imdb_id": "tt1636780"}]))
+            m = AnimeMap(Http(None), tmp)
+            real_loads = json.loads
+            def slow_loads(*a, **k):
+                time.sleep(0.3)
+                return real_loads(*a, **k)
+            results = []
+            with mock.patch.object(providers.json, "loads", slow_loads):
+                threads = [threading.Thread(target=lambda: results.append(m.lookup(anilist=7472))) for _ in range(6)]
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join()
+            self.assertEqual([r.get("ids", {}).get("imdb") for r in results], ["tt1636780"] * 6)
+
 
 class EngineCase(unittest.TestCase):
     def setUp(self):
@@ -598,3 +634,44 @@ class TestYearsInNames(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTrailingEpisodeNumbers(unittest.TestCase):
+    """'Show 003.mkv': a bare number at the end of the name, the way some BD anime packs number episodes.
+    Found 7 Nov 2026: a Gintama pack went into Movies as 368 one-episode 'movies'."""
+    ROOT = "Gintama [BD] [1080p] [HEVC]"
+
+    def items(self, files):
+        items, _, _ = build_items(self.ROOT, [(f, 2_000_000_000) for f in files])
+        return {i.src: i for i in items}
+
+    def test_a_run_of_padded_numbers_is_episodes(self):
+        files = ["[2006] Gintama/Gintama 001-002.mkv"] + [f"[2006] Gintama/Gintama {n:03d}.mkv" for n in range(3, 9)]
+        files += [f"[2011] Gintama'/Gintama {n}.mkv" for n in range(202, 210)]
+        files += ["[Movie] [2010] Gintama Shinyaku Benizakura-hen/[Movie] [2010] Gintama Shinyaku Benizakura-hen.mkv"]
+        items = self.items(files)
+        first = items["[2006] Gintama/Gintama 001-002.mkv"]
+        self.assertEqual((first.kind, first.category, first.title, first.episode, first.episode_end),
+                         ("episode", "show", "Gintama", 1, 2))
+        self.assertTrue(first.absolute)
+        later = items["[2011] Gintama'/Gintama 203.mkv"]
+        self.assertEqual((later.kind, later.title, later.episode), ("episode", "Gintama", 203))
+        self.assertTrue(later.absolute)
+        # one show across the season folders, so the absolute numbers map onto its seasons
+        shows = {(i.title, i.year) for i in items.values() if i.kind == "episode"}
+        self.assertEqual(shows, {("Gintama", 2006)})
+        movie = items["[Movie] [2010] Gintama Shinyaku Benizakura-hen/[Movie] [2010] Gintama Shinyaku Benizakura-hen.mkv"]
+        self.assertEqual(movie.kind, "movie")
+
+    def test_a_movie_collection_is_not_episodes(self):
+        # few files, no zero padding: sequels, not episodes
+        items = self.items(["Rocky Collection/Rocky 2.mkv", "Rocky Collection/Rocky 3.mkv", "Rocky Collection/Rocky 4.mkv"])
+        self.assertEqual({i.kind for i in items.values()}, {"movie"})
+        # a year in the name means a film, however many there are
+        films = [f"Pack/Film {n} ({2000 + n}).mkv" for n in range(1, 7)]
+        self.assertEqual({i.kind for i in self.items(films).values()}, {"movie"})
+        # a single numbered file is never an episode on its own
+        self.assertEqual(self.items(["Apollo 13.mkv"])["Apollo 13.mkv"].kind, "movie")
+        # a year at the end isn't an episode number
+        years = [f"Docs/Report {y}.mkv" for y in range(2010, 2016)]
+        self.assertEqual({i.kind for i in self.items(years).values()}, {"movie"})
