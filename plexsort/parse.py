@@ -57,14 +57,15 @@ EXTRA_RES = [
                          r"music[ ._-]videos?|extras?|bonus|menus?|bloopers|gag reel|openings?|endings?)(?![a-z])")),
 ]
 GENERIC_DIR_RE = re.compile(r"(?i)^(series|seasons?|episodes?|tv|tv series|tv show|anime|shows?|complete|"
-                            r"disc ?\d*|cd ?\d*|bd ?\d*|dvd ?\d*|subs?|subtitles?|video|videos|media|main)$")
+                            r"disc ?\d*|cd ?\d*|bd ?\d*|dvd ?\d*|volumes? ?\d*|vol\.? ?\d*|subs?|subtitles?|video|videos|media|main)$")
 MARKETING_RE = re.compile(r"(?i)\s*(?:[-–:]\s*(?:the\s+)?(?:\w+\s+)?pack\b|[-–:]?\s*(?:the\s+)?"
                           r"(?:complete|collection|box ?set|anthology|(?:tv|anime|movie)?\s*series pack)\b).*$")
 # "Show S01", "Show (S1+S2)", "Show Season 2", "Show Seasons 1-3": everything from there on isn't the title
 SEASON_TOKEN_RE = re.compile(r"(?i)(?<=\S)[\s._\-(\[]+(?:s\d{1,2}(?:\s*[-+&~]\s*s?\d{1,2})*(?:\s*e\d+)?|"
                              r"seasons?\s*\d{1,2}(?:\s*[-+&~]\s*\d{1,2})*)"
                              r"(?=\s*(?:$|[)\]\[(-]|complete\b)).*$")
-YEAR_OR_RANGE_RE = re.compile(r"\(?\s*(?:19|20)\d\d(?:\s*[-–~]\s*(?:19|20)\d\d)?\s*\)?")
+# '(1992)', '(1992-1993)', '(1992-93)'
+YEAR_OR_RANGE_RE = re.compile(r"\(?\s*(?:19|20)\d\d(?:\s*[-–~]\s*(?:(?:19|20)\d\d|\d\d))?\s*\)?")
 ANIME_HINT_RE = re.compile(r"(?i)(^\s*\[[^\]]+\])|(?<![a-z])(ova|oad|ncop|nced|creditless|anime|subsplease|"
                            r"erai-raws|horriblesubs|dual[ .-]?audio|\(cbb\)|bd ?1080p|fansub|-hen)(?![a-z])")
 
@@ -77,6 +78,10 @@ LANGS = {"en": "en", "eng": "en", "english": "en", "ja": "ja", "jpn": "ja", "jap
          "pol": "pl", "polish": "pl", "ar": "ar", "ara": "ar", "arabic": "ar", "da": "da", "dan": "da",
          "danish": "da", "fi": "fi", "fin": "fi", "finnish": "fi", "no": "no", "nor": "no",
          "norwegian": "no"}
+
+# 'On Leather Wings, with Commentary': a cut with the commentary track. It stays in titles (two cuts of a film must
+# not share a destination); the providers drop it when matching episode titles.
+COMMENTARY_RE = re.compile(r"(?i),?\s*\(?\bwith (?:audio |video )?commentary\)?")
 
 MIN_SAMPLE_FREE_SIZE = 400 * 1024 * 1024
 
@@ -112,6 +117,7 @@ class Item:
     subs: list[Sub] = field(default_factory=list)
     note: str = ""                # why it was classified this way
     title_source: str = ""        # filename | folder | root
+    alt_title: str = ""           # the folder's name for the show, tried online when the file's own name finds nothing
     # music (category "music": title = album, artist = album artist)
     artist: str = ""
     track_artist: str = ""        # set when it differs from the album artist (compilations, features)
@@ -149,6 +155,11 @@ class Group:
     def verified(self) -> str:
         provs = {i.verified for i in self.items}
         return provs.pop() if len(provs) == 1 else ""
+
+    @property
+    def alt_title(self) -> str:
+        alts = Counter(i.alt_title for i in self.items if i.alt_title)
+        return alts.most_common(1)[0][0] if alts else ""
 
     @property
     def ids(self) -> dict:
@@ -203,8 +214,8 @@ def item_sort_key(it: Item):
 # --------------------------------------------------------------------------
 
 def strip_numbering(name: str) -> str:
-    """'01. Series' -> 'Series'; '03 - Extras' -> 'Extras'."""
-    return re.sub(r"^\d{1,2}\s*[.)]\s*|^\d{1,2}\s+-\s+", "", name).strip()
+    """'01. Series' -> 'Series'; '03 - Extras' -> 'Extras'; '1b. Movies' -> 'Movies'."""
+    return re.sub(r"^\d{1,2}[a-z]?\s*[.)]\s*|^\d{1,2}[a-z]?\s+-\s+", "", name).strip()
 
 
 def strip_tags(s: str) -> str:
@@ -302,13 +313,18 @@ def _meaningful_dir(dirs: list[str]) -> tuple[str, int | None] | None:
         bare = YEAR_OR_RANGE_RE.sub("", name).strip(" -_.")   # "Season 17 (2013-2014)" -> "Season 17"
         if SEASON_RE.search(bare) and len(SEASON_RE.sub("", bare).strip(" -_.")) < 3:
             continue
-        if (MOVIE_RE.fullmatch(bare) or SPECIAL_RE.fullmatch(bare) or extra_type_of(bare) == bare.lower()
+        if (MOVIE_RE.fullmatch(bare) or SPECIAL_RE.fullmatch(bare) or _is_extra_dir(bare)
                 or GENERIC_DIR_RE.match(bare) or not bare):
             continue
         title, year = clean_title(name)
         if title:
             return title, year
     return None
+
+
+def _is_extra_dir(bare: str) -> bool:
+    """'Extras', 'Bonus', 'Behind the Scenes': a folder that only says what kind of extras it holds."""
+    return any(rx.fullmatch(bare) for _, rx in EXTRA_RES)
 
 
 def _season_from_dirs(dirs: list[str]) -> int | None:
@@ -377,7 +393,7 @@ def classify_video(rel: str, size: int, root_name: str, siblings: dict[str, list
     # 3. markers from the innermost folder outwards, then the file name itself
     marker = None
     for d in reversed(dir_names):
-        bare = re.sub(r"\(?\s*(19|20)\d\d\s*\)?", "", d).strip(" -_.")
+        bare = YEAR_OR_RANGE_RE.sub("", d).strip(" -_.")
         if SPECIAL_RE.search(bare) and len(bare) <= 20:
             marker = ("special", d)
         elif (et := extra_type_of(bare)) and len(bare) <= 25:
@@ -386,6 +402,8 @@ def classify_video(rel: str, size: int, root_name: str, siblings: dict[str, list
             marker = ("movie", d)
         if marker:
             break
+    if marker and marker[0] == "extra" and marker[1] == "other" and (et := extra_type_of(tagless)):
+        marker = ("extra", et)      # 'Extras/Deleted Scene.mp4': the file says which kind
     sxe = SXXEYY_RE.search(tagless) or NXNN_RE.search(tagless)
     if not marker and not sxe:
         if (et := extra_type_of(tagless)) and not EPWORD_RE.search(tagless):
@@ -424,7 +442,7 @@ def classify_video(rel: str, size: int, root_name: str, siblings: dict[str, list
             m = LEADING_NUM_RE.match(tagless)
             folder = "/".join(dirs)
             numbered = [s for s in siblings.get(folder, []) if LEADING_NUM_RE.match(despace(strip_tags(s)))]
-            if m and len(numbered) >= 2 and not (1900 <= int(m.group(1)) <= 2100):
+            if m and len(numbered) >= 2 and not (1900 <= int(m.group(1)) <= 2100) and not _numbered_films(numbered):
                 ep_match, item.note = m, "numbered files in a folder"
         if not ep_match and (m := _trailing_episode(tagless, siblings.get("/".join(dirs), []))):
             ep_match, item.note = m, "numbered run of same-named files"
@@ -453,7 +471,7 @@ def classify_video(rel: str, size: int, root_name: str, siblings: dict[str, list
         item.episode = item.episode_end = item.season = None
         item.absolute = False
         item.note = "movie (folder/name marker)"
-        _assign_movie_title(item, stem, dirs, root_name)
+        _assign_movie_title(item, _collection_stem(stem, tagless, siblings.get("/".join(dirs), [])), dirs, root_name)
         return item
 
     if item.kind == "episode":
@@ -467,8 +485,26 @@ def classify_video(rel: str, size: int, root_name: str, siblings: dict[str, list
     # 4. otherwise it's a movie
     item.kind = "movie"
     item.note = "single video" if sum(len(v) for v in siblings.values()) <= 1 else "no episode numbering"
-    _assign_movie_title(item, stem, dirs, root_name)
+    _assign_movie_title(item, _collection_stem(stem, tagless, siblings.get("/".join(dirs), [])), dirs, root_name)
     return item
+
+
+def _numbered_films(numbered: list[str]) -> bool:
+    """'1. Film (1993 ...)', '2. Other Film (1998 ...)': a numbered list where every name carries its own year is a
+    film collection, not episodes."""
+    rests = []
+    for s in numbered:
+        t = despace(strip_tags(s))
+        m = LEADING_NUM_RE.match(t)
+        rests.append(t[m.end():] if m else t)
+    return bool(rests) and all(find_year(r) for r in rests)
+
+
+def _collection_stem(stem: str, tagless: str, siblings: list[str]) -> str:
+    """'1. Film (1993)' among numbered films -> 'Film (1993)': the number orders the collection, it isn't the name."""
+    if LEADING_NUM_RE.match(tagless) and sum(1 for s in siblings if LEADING_NUM_RE.match(despace(strip_tags(s)))) >= 2:
+        return strip_numbering(stem)
+    return stem
 
 
 
@@ -494,6 +530,8 @@ def _assign_show_title(item: Item, prefix: str, dirs: list[str], root_name: str)
     title, year = clean_title(prefix) if prefix.strip(" -_.") else ("", None)
     if len(title) >= 2 and not title.isdigit():
         item.title_source = "filename"
+        if (found := _meaningful_dir(dirs)) and normalize(found[0]) != normalize(title):
+            item.alt_title = found[0]     # 'Batman (T.A.S)' files in a 'Batman - The Animated Series' folder
     elif found := _meaningful_dir(dirs):
         title, year = found
         item.title_source = "folder"
@@ -614,32 +652,82 @@ def build_items(root_name: str, files: list[tuple[str, int]], tags_for=None
 def _unify(items: list[Item], root_name: str) -> None:
     """Make titles consistent within one torrent."""
     shows = [i for i in items if i.kind == "episode" and i.season != 0]
-    # merge show titles that differ only in parentheticals / case
+    # merge show titles that differ only in parentheticals / case, unless the files say they are different shows:
+    # 'Batman (T.A.S)', 'Batman (T.B.A.T.B)' and 'The Batman' each have their own S01E01
     if shows:
-        base = Counter(normalize(re.sub(r"\([^)]*\)", "", i.title)) for i in shows)
         for it in shows:
-            key = normalize(re.sub(r"\([^)]*\)", "", it.title))
-            it._key = key  # type: ignore[attr-defined]
-        for key in base:
+            it._key = normalize(re.sub(r"\([^)]*\)", "", it.title))  # type: ignore[attr-defined]
+        for key in {i._key for i in shows}:  # type: ignore[attr-defined]
             members = [i for i in shows if i._key == key]  # type: ignore[attr-defined]
-            title = Counter(i.title for i in members).most_common(1)[0][0]
-            years = [i.year for i in members if i.year]
-            year = min(years) if years else None   # a show's year is when it began
-            for i in members:
-                i.title, i.year = title, year
+            clusters: list[list[Item]] = []
+            for title, _ in Counter(i.title for i in members).most_common():
+                mine = [i for i in members if i.title == title]
+                for c in clusters:
+                    if not _numbers_collide(c + mine):
+                        c.extend(mine)
+                        break
+                else:
+                    clusters.append(mine)
+            for c in clusters:
+                title = Counter(i.title for i in c).most_common(1)[0][0]
+                years = [i.year for i in c if i.year]
+                year = min(years) if years else None   # a show's year is when it began
+                for i in c:
+                    i.title, i.year = title, year
     show_titles = Counter((i.title, i.year) for i in shows)
     movies = [i for i in items if i.kind == "movie"]
+    owners = _owners_by_dir(items)
     for it in items:
         if it.kind == "extra" or (it.kind == "episode" and it.season == 0):
             if len(show_titles) == 1:
                 (title, year), = show_titles
                 it.category, it.title, it.year = "show", title, year
+            elif owner := _enclosing_owner(it, owners):
+                it.category, it.title, it.year = owner
             elif not show_titles and it.kind == "extra" and len({(m.title, m.year) for m in movies}) == 1:
                 it.category, it.title, it.year = "movie", movies[0].title, movies[0].year
             elif not show_titles and it.kind == "episode":
                 it.category = "show"
         if it.kind == "episode" and it.absolute and it.season is None:
             it.season = 1
+
+
+def _numbers_collide(members: list[Item]) -> bool:
+    """True when files under different titles claim the same episode number: those are different shows."""
+    by_title: dict[str, set] = {}
+    for i in members:
+        if i.episode is not None:
+            by_title.setdefault(i.title, set()).add((i.season or 1, i.episode))
+    seen: set = set()
+    for nums in by_title.values():
+        if nums & seen:
+            return True
+        seen |= nums
+    return False
+
+
+def _owners_by_dir(items: list[Item]) -> dict[str, set[tuple]]:
+    """For every folder, the (category, title, year) of the episodes and movies anywhere beneath it."""
+    owners: dict[str, set[tuple]] = {}
+    for it in items:
+        if it.kind not in ("episode", "movie") or (it.kind == "episode" and it.season == 0):
+            continue
+        parts = it.src.split("/")[:-1]
+        for depth in range(len(parts) + 1):
+            owners.setdefault("/".join(parts[:depth]), set()).add((it.category, it.title, it.year))
+    return owners
+
+
+def _enclosing_owner(it: Item, owners: dict[str, set[tuple]]) -> tuple | None:
+    """The one title whose files share a folder with this extra, looking outwards from its own folder:
+    'Volume 1/Extras/Featurette.mp4' belongs to the show in 'Volume 1'. Several titles there, or none anywhere
+    below the root, and the caller's pack-wide rules decide."""
+    parts = it.src.split("/")[:-1]
+    for depth in range(len(parts), 0, -1):
+        found = owners.get("/".join(parts[:depth]))
+        if found:
+            return next(iter(found)) if len(found) == 1 else None
+    return None
 
 
 def _number_specials(items: list[Item]) -> None:

@@ -57,7 +57,7 @@ Before anything is moved, every title is given a library folder:
 
 Everything works without any API key. A TMDB key just adds another source.
 
-Each detected title is searched automatically and accepted only when it scores ≥ 0.85 with a clear lead. Anything else is marked **not verified**, and you pick the match yourself (`f`). For shows, the episode list is fetched to fill in episode titles, to map absolute anime numbering onto seasons, and to flag episode numbers that don't exist. Results that two providers agree on get a small bonus. A country suffix (`The Office US`) is used as a hint. All responses are cached in the database.
+Each detected title is searched automatically and accepted only when it scores ≥ 0.85 with a clear lead. Anything else is marked **not verified**, and you pick the match yourself (`f`). For shows, the episode list is fetched to fill in episode titles, to map absolute anime numbering onto seasons, and to flag episode numbers that don't exist. A pack numbered in DVD or production order is renumbered by episode title to the provider's (aired) order, which is what Plex uses; the file row says `renumbered by title (was S01E05)`. When a file's own name finds nothing sure (`Batman (T.A.S)`), the folder it sits in is tried next (`Batman - The Animated Series`). Results that two providers agree on get a small bonus. A country suffix (`The Office US`) is used as a hint. All responses are cached in the database.
 
 ## Music
 
