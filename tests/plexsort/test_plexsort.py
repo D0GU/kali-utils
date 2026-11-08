@@ -632,6 +632,174 @@ class TestYearsInNames(unittest.TestCase):
         self.assertEqual(clean_title("Blade Runner 2049 1080p"), ("Blade Runner", 2049))
 
 
+class TestPackOfSeveralShows(unittest.TestCase):
+    """One torrent, five Batman series (8 Nov 2026): 'Batman (T.A.S)', 'Batman (T.B.A.T.B)' and 'The Batman' were
+    merged into one show, the DVD extras became a sitcom called 'Extras', and two films in '1b. T.A.S. Movies'
+    came out as episodes of a show by that name."""
+    ROOT = "BATMAN Cartoons (1992-2015) - The FIVE Complete Animated Series - 480p-720p x264"
+    FILES = [
+        "1a. Batman - The Animated Series (1992-99)/Volume 1 (1992)/Batman (T.A.S) - S01 E01 - On Leather Wings, with Commentary (480p DVDRip).mp4",
+        "1a. Batman - The Animated Series (1992-99)/Volume 1 (1992)/Batman (T.A.S) - S01 E01 - On Leather Wings, with Commentary (480p DVDRip).srt",
+        "1a. Batman - The Animated Series (1992-99)/Volume 1 (1992)/Batman (T.A.S) - S01 E02 - Christmas with the Joker (480p DVDRip).mp4",
+        "1a. Batman - The Animated Series (1992-99)/Volume 1 (1992)/Extras/Batman (T.A.S) - S01 Extra 01 - The Dark Night's First Night (480p DVDRip).mp4",
+        "1a. Batman - The Animated Series (1992-99)/Volume 2 (1992-93)/Batman (T.A.S) - S02 E29 - Eternal Youth (480p DVDRip).mp4",
+        "1a. Batman - The Animated Series (1992-99)/Volume 4 (1997-99)/The New Batman Adventures - Ep. 01 - Holiday Knights (480p DVDRip).mp4",
+        "1a. Batman - The Animated Series (1992-99)/Volume 4 (1997-99)/The New Batman Adventures - Ep. 02 - Sins of the Father (480p DVDRip).mp4",
+        "1a. Batman - The Animated Series (1992-99)/Volume 4 (1997-99)/Extras/Batman (T.A.S) - S04 Extra 01 - Introduction (480p DVDRip).mp4",
+        "1b. T.A.S. Movies (1993-98)/1. Batman - Mask of The Phantasm (1993 - 480p DVDRip).mp4",
+        "1b. T.A.S. Movies (1993-98)/1. Batman - Mask of The Phantasm (1993 - 480p DVDRip).srt",
+        "1b. T.A.S. Movies (1993-98)/2. Batman and Mr. Freeze - Subzero (1998 - 480p DVDRip).mp4",
+        "2a. Batman Beyond (1999-2001)/Extras/Batman Beyond - Extra 01 - Gotham, City Of The Future (480p DVDRip).mp4",
+        "2a. Batman Beyond (1999-2001)/Season 1 (1999)/Batman Beyond - S01 E01 - Rebirth (Part 1), with Commentary (480p DVDRip).mp4",
+        "2a. Batman Beyond (1999-2001)/Season 1 (1999)/Extra/Batman Beyond - S01 Extra 01 - Inside Batman Beyond (480p DVDRip).mp4",
+        "2a. Batman Beyond (1999-2001)/Season 2 (1999-2000)/Batman Beyond - S02 E01 - Splicers, with Commentary (480p DVDRip).mp4",
+        "2b. BB - Return of the Joker (2000)/Batman Beyond - Return Of The Joker, with Commentary (2000 - 720p BluRay).mp4",
+        "2b. BB - Return of the Joker (2000)/Extras/Deleted Scene (480p DVDRip).mp4",
+        "3a. The Batman (2004-08)/Season 1 (2004-05)/The Batman - S01 E01 - The Bat In The Belfry (480p Web-DL).mp4",
+        "3a. The Batman (2004-08)/Season 2 (2005)/The Batman - S02 E01 - The Cat, The Bat And The Very Ugly (480p Web-DL).mp4",
+        "4a. The Brave and The Bold (2008-11)/Season 1 (2008-09)/Batman (T.B.A.T.B) - S01 E01 - The Rise Of The Blue Beetle (720p Web-DL).mp4",
+        "4a. The Brave and The Bold (2008-11)/Season 2 (2009-11)/Batman (T.B.A.T.B) - S02 E01 - Long Arm Of The Law (720p Web-DL).mp4",
+        "5a. Beware The Batman (2013-14)/Beware the Batman - Ep. 01 - Hunted (720p Web-DL).mp4",
+    ]
+
+    @classmethod
+    def setUpClass(cls):
+        items, cls.leftovers, _ = build_items(cls.ROOT, [(f, 300_000_000) for f in cls.FILES])
+        cls.items = {i.src: i for i in items}
+
+    def item(self, fragment):
+        hits = [i for src, i in self.items.items() if fragment in src]
+        self.assertEqual(len(hits), 1, fragment)
+        return hits[0]
+
+    def test_shows_with_their_own_first_episodes_are_not_merged(self):
+        shows = {(i.title, i.year) for i in self.items.values() if i.kind == "episode"}
+        self.assertEqual(shows, {("Batman (T.A.S)", 1992), ("Batman (T.B.A.T.B)", 2008), ("The Batman", 2004),
+                                 ("The New Batman Adventures", 1997), ("Batman Beyond", 1999), ("Beware the Batman", 2013)})
+
+    def test_the_folder_name_is_kept_as_a_second_name_to_look_up(self):
+        self.assertEqual(self.item("On Leather Wings").alt_title, "Batman - The Animated Series")
+        self.assertEqual(self.item("Blue Beetle").alt_title, "The Brave and The Bold")
+        self.assertEqual(self.item("Hunted").alt_title, "")     # same name as the file's: nothing new to try
+
+    def test_extras_belong_to_the_title_in_their_folder(self):
+        first_night = self.item("First Night")
+        self.assertEqual((first_night.kind, first_night.category, first_night.title), ("extra", "show", "Batman (T.A.S)"))
+        self.assertEqual(self.item("Introduction").title, "The New Batman Adventures")   # Volume 4 holds that show
+        self.assertEqual(self.item("City Of The Future").title, "Batman Beyond")         # a folder above the seasons
+        self.assertEqual(self.item("Inside Batman Beyond").title, "Batman Beyond")
+        deleted = self.item("Deleted Scene")
+        self.assertEqual((deleted.kind, deleted.category, deleted.title, deleted.extra_type),
+                         ("extra", "movie", "Batman Beyond - Return Of The Joker, with Commentary", "deleted"))
+
+    def test_a_numbered_folder_of_films_is_movies(self):
+        phantasm = self.item("Phantasm (1993")
+        self.assertEqual((phantasm.kind, phantasm.title, phantasm.year), ("movie", "Batman - Mask of The Phantasm", 1993))
+        self.assertEqual(len(phantasm.subs), 1)
+        subzero = self.item("Subzero")
+        self.assertEqual((subzero.kind, subzero.title, subzero.year), ("movie", "Batman and Mr. Freeze - Subzero", 1998))
+        self.assertEqual(self.leftovers, [])
+
+    def test_one_show_spelled_two_ways_still_merges(self):
+        items, _, _ = build_items("Some Show Pack", [("Some Show (2019) - S01E01 - A.mkv", 1), ("Some Show - S01E02 - B.mkv", 1),
+                                                     ("Some Show - S02E01 - C.mkv", 1)])
+        self.assertEqual({(i.title, i.year) for i in items}, {("Some Show", 2019)})
+
+    def test_numbering_helpers(self):
+        from plexsort.parse import _meaningful_dir, strip_numbering
+        self.assertEqual(strip_numbering("1b. T.A.S. Movies"), "T.A.S. Movies")
+        self.assertEqual(strip_numbering("01. Series"), "Series")
+        self.assertIsNone(_meaningful_dir(["Volume 1 (1992)", "Extras"]))
+        self.assertEqual(_meaningful_dir(["4a. The Brave and The Bold (2008-11)", "Season 1 (2008-09)"]),
+                         ("The Brave and The Bold", 2008))
+
+
+class TestRenumberingByTitle(unittest.TestCase):
+    """DVD-order packs: the provider lists the same titles under other numbers, and Plex goes by the provider."""
+    SHOW = Match("TVmaze", "757", "show", "Batman: The Animated Series", 1992, {"tvdb": 76168})
+
+    class Listing:
+        def episodes(self, match):
+            return [Episode(1, 1, "The Cat and the Claw"), Episode(1, 2, "On Leather Wings"), Episode(1, 3, "Heart of Ice"),
+                    Episode(1, 8, "The Cat and the Claw Part II"), Episode(1, 9, "Pretty Poison"), Episode(1, 10, "Nothing to Fear"),
+                    Episode(1, 38, "Christmas with the Joker"), Episode(1, 60, "Eternal Youth"), Episode(2, 1, "Sideshow"),
+                    Episode(1, 12, "Deep Cover for Batman! (1)"), Episode(0, 1, "Special", special=True)]
+
+    def items(self, names):
+        items, _, _ = build_items("Batman Pack", [(f"Vol/Batman - {n} (480p).mp4", 1) for n in names])
+        apply_match(items, self.SHOW, self.Listing())
+        return {i.src.split(" - ", 1)[1].split(" (480p")[0]: i for i in items}
+
+    def test_titles_decide_the_number(self):
+        got = self.items(["S01 E01 - On Leather Wings, with Commentary", "S01 E02 - Christmas with the Joker",
+                          "S01 E03 - Nothing to Fear", "S01 E15 - The Cat and the Claw (Part I)",
+                          "S01 E16 - The Cat and the Claw (Part II)", "S02 E29 - Eternal Youth", "S01 E12 - Deep Cover For Batman"])
+        numbers = {k: (i.season, i.episode, i.ep_title) for k, i in got.items()}
+        self.assertEqual(numbers["S01 E01 - On Leather Wings, with Commentary"], (1, 2, "On Leather Wings"))
+        self.assertEqual(numbers["S01 E02 - Christmas with the Joker"], (1, 38, "Christmas with the Joker"))
+        self.assertEqual(numbers["S01 E03 - Nothing to Fear"], (1, 10, "Nothing to Fear"))
+        self.assertEqual(numbers["S01 E15 - The Cat and the Claw (Part I)"], (1, 1, "The Cat and the Claw"))
+        self.assertEqual(numbers["S01 E16 - The Cat and the Claw (Part II)"], (1, 8, "The Cat and the Claw Part II"))
+        self.assertEqual(numbers["S02 E29 - Eternal Youth"], (1, 60, "Eternal Youth"))
+        self.assertEqual(numbers["S01 E12 - Deep Cover For Batman"], (1, 12, "Deep Cover for Batman! (1)"))  # already right
+        self.assertIn("renumbered by title (was S01E01)", got["S01 E01 - On Leather Wings, with Commentary"].note)
+        self.assertTrue(all(i.ep_found for i in got.values()))
+
+    def test_numbers_that_already_fit_stay(self):
+        got = self.items(["S01 E02 - On Leather Wings", "S01 E09 - Pretty Poison", "S01 E05 - Unknown Cut"])
+        self.assertEqual((got["S01 E02 - On Leather Wings"].season, got["S01 E02 - On Leather Wings"].episode), (1, 2))
+        self.assertEqual(got["S01 E09 - Pretty Poison"].episode, 9)
+        self.assertEqual((got["S01 E05 - Unknown Cut"].episode, got["S01 E05 - Unknown Cut"].ep_found), (5, False))
+
+    def test_nothing_moves_onto_a_taken_or_shared_number(self):
+        # two files claim 'Pretty Poison': neither moves; a move onto a number another file keeps is refused too
+        got = self.items(["S01 E04 - Pretty Poison", "S01 E05 - Pretty Poison", "S01 E09 - Heart of Ice", "S01 E03 - Nothing to Fear"])
+        self.assertEqual({got["S01 E04 - Pretty Poison"].episode, got["S01 E05 - Pretty Poison"].episode}, {4, 5})
+        self.assertEqual(got["S01 E09 - Heart of Ice"].episode, 3)        # 'Heart of Ice' is listed as E03
+        self.assertEqual(got["S01 E03 - Nothing to Fear"].episode, 10)   # and 'Nothing to Fear' as E10
+        # a double-episode file keeps its span
+        got = self.items(["S01 E05-E06 - Nothing to Fear"])
+        it = next(iter(got.values()))
+        self.assertEqual((it.episode, it.episode_end), (5, 6))
+
+    def test_episode_keys(self):
+        from plexsort.providers import episode_key
+        self.assertEqual(episode_key("The Cat and the Claw (Part I)"), "cat and the claw part 1")
+        for a, b in [("The Cat and the Claw (Part I)", "The Cat and the Claw (1)"), ("Two-Face (Part II)", "Two-Face Part II"),
+                     ("The Siege Of Starro, Part One", "The Siege of Starro! (1)"), ("Robin's Reckoning (Part I), with Commentary", "Robin's Reckoning (1)"),
+                     ("Batgirl Begins, Part II", "Batgirl Begins (2)")]:
+            self.assertEqual(episode_key(a), episode_key(b), (a, b))
+        self.assertNotEqual(episode_key("Two-Face (Part I)"), episode_key("Two-Face (Part II)"))
+
+
+class TestFolderNameFallback(unittest.TestCase):
+    """'Batman (T.A.S)' finds nothing sure online; the folder it sits in, 'Batman - The Animated Series', does."""
+
+    def test_the_folder_name_is_tried_when_the_file_name_fails(self):
+        from unittest import mock
+        from plexsort.parse import Group
+        from plexsort.providers import Matcher
+        tas = Match("Wikidata", "Q673517", "show", "Batman: The Animated Series", 1992, {"tvdb": 76168}, score=0.88)
+        other = Match("TVmaze", "1", "show", "The Batman", 2004, {"tvdb": 73180}, score=0.77)
+        queries = []
+
+        def search(self, query, category, year=None, anime=False, **kw):
+            queries.append(query)
+            return [other, Match("TVmaze", "2", "show", "Batman", 1966, score=0.72)] if "(T.A.S)" in query else [tas, other]
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(Matcher, "search", search):
+            matcher = Matcher({"database": os.path.join(tmp, "lib.db"), "tmdb_api_key": ""})
+            items, _, _ = build_items("Pack", [("Batman - The Animated Series (1992-99)/Batman (T.A.S) - S01 E01 - Wings.mp4", 1)])
+            group = Group("show", items[0].title, items[0].year, items)
+            self.assertEqual(group.alt_title, "Batman - The Animated Series")
+            self.assertIs(matcher.best(group), tas)
+            self.assertEqual(queries, ["Batman (T.A.S)", "Batman - The Animated Series"])
+            # a sure hit on the file's own name asks nothing more
+            queries.clear()
+            group.title = "The Batman"
+            self.assertIs(matcher.best(group), tas)   # the fake returns tas first for anything but '(T.A.S)'
+            self.assertEqual(queries, ["The Batman"])
+
+
 if __name__ == "__main__":
     unittest.main()
 

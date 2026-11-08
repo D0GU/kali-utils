@@ -31,7 +31,7 @@ from kutil.net import Http as BaseHttp
 from kutil.net import NetError as ProviderError
 from kutil.text import normalize, similarity
 
-from .parse import Group, Item, main_artist
+from .parse import COMMENTARY_RE, Group, Item, main_artist
 
 USER_AGENT = f"plexsort/{__version__} ( https://github.com/D0GU/kali-utils )"  # MusicBrainz asks for a contact URL
 DAY = 86400
@@ -711,7 +711,17 @@ class Matcher:
             same = lambda m: normalize(m.title) == normalize(top.title) and normalize(m.artist) == normalize(top.artist)
             runner = next((m.score for m in results[1:] if not same(m)), 0)
             return top if top.score >= 0.85 and top.score - runner >= 0.04 else None
-        results = self.search(group.title, group.category, group.year, group.anime, stop_at=0.9)
+        match = self._sure(self.search(group.title, group.category, group.year, group.anime, stop_at=0.9))
+        if match is None and group.alt_title and normalize(group.alt_title) != normalize(group.title):
+            # 'Batman (T.A.S) - S01E01' inside a 'Batman - The Animated Series' folder: the folder says it better
+            errors = self.errors
+            match = self._sure(self.search(group.alt_title, group.category, group.year, group.anime, stop_at=0.9))
+            self.errors = errors + self.errors
+        return match
+
+    @staticmethod
+    def _sure(results: list[Match]) -> Match | None:
+        """The top result, when it is good and clearly ahead of the runner-up."""
         if not results:
             return None
         top = results[0]
@@ -735,6 +745,62 @@ class Matcher:
         except ProviderError as e:
             self.errors.append(str(e))
         return []
+
+
+PART_WORDS = {"i": 1, "ii": 2, "iii": 3, "iv": 4, "v": 5, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5}
+PART_SUFFIX_RE = re.compile(r"(?i)[\s,:\-]*\(?\b(?:part|pt\.?|chapter)\s*([ivx]+|\d+|one|two|three|four|five)\b\.?\)?\s*$"
+                            r"|\s*\((\d{1,2})\)\s*$")
+
+
+def episode_key(title: str) -> str:
+    """'The Cat and the Claw (Part I)', 'The Cat and the Claw (1)' and 'the cat and the claw part 1' are one key;
+    a ', with Commentary' cut is the same episode."""
+    s = COMMENTARY_RE.sub("", title or "")
+    if m := PART_SUFFIX_RE.search(s):
+        raw = (m.group(1) or m.group(2)).lower()
+        n = PART_WORDS.get(raw, int(raw) if raw.isdigit() else None)
+        s = s[:m.start()] + (f" part {n}" if n is not None else "")
+    return normalize(s)
+
+
+def _renumber_by_title(numbered: list[Item], regular: list[Episode], by_num: dict) -> None:
+    """A pack numbered in production or DVD order: when a file's own title is listed under another number, take that
+    number, so Plex (which goes by the provider's order) shows the right episode. A file whose number already
+    carries its title stays, and nothing moves onto a number another file keeps or two files would share."""
+    by_title: dict[str, list[Episode]] = {}
+    for e in regular:
+        by_title.setdefault(episode_key(e.title), []).append(e)
+
+    def listed(title: str) -> Episode | None:
+        key = episode_key(title)
+        if not key:
+            return None
+        hits = by_title.get(key)
+        if not hits and key.endswith(" part 1"):            # 'Two-Face (Part I)' when the list says 'Two-Face'
+            hits = by_title.get(key[:-7])
+        if not hits and not re.search(r" part \d+$", key):   # 'Deep Cover for Batman' when the list says '... (1)'
+            hits = by_title.get(key + " part 1")
+        return hits[0] if hits and len(hits) == 1 else None
+
+    moves: dict[int, Episode] = {}
+    for it in numbered:
+        if it.episode_end:
+            continue
+        e = listed(it.ep_title)
+        if not e or (e.season, e.number) == (it.season or 1, it.episode):
+            continue
+        here = by_num.get((it.season or 1, it.episode))
+        if here and episode_key(here.title) == episode_key(it.ep_title):
+            continue
+        moves[id(it)] = e
+    targets = Counter((e.season, e.number) for e in moves.values())
+    staying = {(it.season or 1, it.episode) for it in numbered if id(it) not in moves}
+    for it in numbered:
+        e = moves.get(id(it))
+        if e and targets[(e.season, e.number)] == 1 and (e.season, e.number) not in staying:
+            was = f"S{it.season or 1:02d}E{it.episode:02d}"
+            it.season, it.episode, it.episode_end = e.season, e.number, None
+            it.note = f"renumbered by title (was {was})"
 
 
 def _version(title: str) -> str:
@@ -863,6 +929,7 @@ def apply_match(items: list[Item], match: Match, matcher: Matcher | None = None)
             if it.episode_end:
                 it.episode_end = None
     numbered = [it for it in items if it.kind == "episode" and it.season != 0 and it.episode is not None]
+    _renumber_by_title(numbered, regular, by_num)
     uses = Counter((it.season or 1, it.episode) for it in numbered)
     for it in numbered:
         e = by_num.get((it.season or 1, it.episode))
